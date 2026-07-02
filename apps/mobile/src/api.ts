@@ -2,6 +2,7 @@ import { API_URL, ROOM_ID } from "./config";
 import type {
   ChatMessage,
   DirectConversation,
+  ProfileUpdateInput,
   PublicUser,
   RegisterInput,
   Session,
@@ -57,6 +58,22 @@ export async function fetchCurrentUser(token: string): Promise<PublicUser> {
   );
 
   return body.user;
+}
+
+export async function updateProfile(
+  token: string,
+  input: ProfileUpdateInput,
+): Promise<Session> {
+  const response = await fetch(`${API_URL}/api/auth/me`, {
+    method: "PATCH",
+    headers: {
+      ...authHeaders(token),
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(input),
+  });
+
+  return parseResponse<Session>(response, "Unable to update profile");
 }
 
 export async function fetchUsers(token: string): Promise<PublicUser[]> {

@@ -24,6 +24,14 @@ type CreateUserInput = {
   passwordHash: string;
 };
 
+type UpdateUserProfileInput = {
+  userId: string;
+  username?: string;
+  handle?: string;
+  email?: string;
+  displayName?: string;
+};
+
 type UserRow = {
   id: string;
   username: string;
@@ -157,6 +165,37 @@ export class TalkNestDatabase {
       );
 
     return user;
+  }
+
+  updateUserProfile(input: UpdateUserProfileInput): UserRecord | null {
+    const current = this.findUserById(input.userId);
+
+    if (!current) {
+      return null;
+    }
+
+    const next = {
+      username: input.username?.trim().toLowerCase() ?? current.username,
+      handle: input.handle ? normalizeHandle(input.handle) : current.handle,
+      email: input.email?.trim().toLowerCase() ?? current.email,
+      displayName: input.displayName?.trim() ?? current.displayName,
+    };
+
+    this.db
+      .prepare(
+        `UPDATE users
+         SET username = ?, handle = ?, email = ?, display_name = ?
+         WHERE id = ?`,
+      )
+      .run(
+        next.username,
+        next.handle,
+        next.email,
+        next.displayName,
+        input.userId,
+      );
+
+    return this.findUserById(input.userId);
   }
 
   listUsers(): PublicUser[] {

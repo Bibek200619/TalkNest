@@ -16,6 +16,7 @@ import {
   directConversationSchema,
   loginSchema,
   messageQuerySchema,
+  profileUpdateSchema,
   registerSchema,
 } from "./schemas.js";
 
@@ -59,6 +60,20 @@ export function createApp(deps: { db: TalkNestDatabase; config: AppConfig }) {
 
   app.get("/api/auth/me", requireAuth, (req, res) => {
     res.json({ user: req.user });
+  });
+
+  app.patch("/api/auth/me", requireAuth, (req, res, next) => {
+    try {
+      if (!req.user) {
+        throw new ValidationError("Missing authenticated user");
+      }
+
+      const input = profileUpdateSchema.parse(req.body);
+      const session = authService.updateProfile(req.user, input);
+      res.json(session);
+    } catch (error) {
+      next(error);
+    }
   });
 
   app.get("/api/users", requireAuth, (_req, res) => {

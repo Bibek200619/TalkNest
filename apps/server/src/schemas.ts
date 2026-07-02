@@ -55,6 +55,13 @@ export const registerSchema = z.object({
   password: z.string().min(8, "Password must be at least 8 characters"),
 });
 
+export const profileUpdateSchema = registerSchema
+  .omit({ password: true })
+  .partial()
+  .refine((input) => Object.keys(input).length > 0, {
+    message: "Choose at least one profile field to update",
+  });
+
 export const messageInputSchema = z.object({
   roomId: z.string().trim().min(1).max(80).default("lobby"),
   text: z.string().trim().max(1000).default(""),
@@ -124,4 +131,5 @@ export const directConversationSchema = z.object({
 
 export type LoginInput = z.infer<typeof loginSchema>;
 export type RegisterInput = z.infer<typeof registerSchema>;
+export type ProfileUpdateInput = z.infer<typeof profileUpdateSchema>;
 export type MessageInput = z.infer<typeof messageInputSchema>;

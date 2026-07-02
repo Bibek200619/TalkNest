@@ -28,6 +28,9 @@ No demo users are seeded. Create an account in the app, then create a second acc
 
 - Users get a unique handle and can open one-to-one chats by entering another user handle.
 - The main app uses a left rail, chat list, and active conversation layout inspired by modern messaging apps.
+- The app rail and chat list sidebar can be collapsed independently.
+- Home, Chat, Contacts, Notifications, Calendar, and Settings nav items open dedicated panels.
+- Settings supports dark theme plus editable display name, username, handle, and email.
 - Messages can include text, a photo, a video, or one document attachment.
 - Supported attachment types: JPEG, PNG, WebP, GIF, MP4, MOV, WebM, PDF, DOC, DOCX, PPT, PPTX, and TXT.
 - Size limits: photos and videos up to 4 MB; documents up to 2 MB.
@@ -107,6 +110,7 @@ The real-time chat backend should be deployed separately to a long-running Node 
 - `POST /api/auth/register` - creates a user and returns `{ token, user }`
 - `POST /api/auth/login` - returns `{ token, user }`
 - `GET /api/auth/me` - validates a bearer token
+- `PATCH /api/auth/me` - updates display name, username, handle, or email and returns a refreshed `{ token, user }`
 - `GET /api/users` - returns public users and their handles
 - `POST /api/direct-conversations/resolve` - accepts `{ handle }` and returns a private room for the authenticated user and that handle
 - `GET /api/messages?roomId=lobby` - returns recent room messages

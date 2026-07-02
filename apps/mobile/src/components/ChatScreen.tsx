@@ -19,6 +19,8 @@ import {
   AtSign,
   Bell,
   Calendar,
+  ChevronLeft,
+  ChevronRight,
   FileText,
   Hash,
   Home,
@@ -29,6 +31,7 @@ import {
   MoreVertical,
   Paperclip,
   Plus,
+  Save,
   Search,
   Send,
   Settings,
@@ -49,6 +52,7 @@ import type {
   ChatAttachment,
   ChatMessage,
   ConnectionState,
+  ProfileUpdateInput,
   PublicUser,
   Session,
 } from "../types";
@@ -58,8 +62,17 @@ type Props = {
   session: Session;
   onLogout: () => Promise<void>;
   onToggleTheme: () => void;
+  onUpdateProfile: (input: ProfileUpdateInput) => Promise<Session>;
   theme: AppTheme;
 };
+
+type AppSection =
+  | "home"
+  | "chat"
+  | "contacts"
+  | "notifications"
+  | "calendar"
+  | "settings";
 
 type ConversationView =
   | {
@@ -123,15 +136,30 @@ export function ChatScreen({
   session,
   onLogout,
   onToggleTheme,
+  onUpdateProfile,
   theme,
 }: Props) {
   const { width } = useWindowDimensions();
   const compact = width < 900;
-  const styles = useMemo(() => createStyles(theme, compact), [compact, theme]);
+  const [navCollapsed, setNavCollapsed] = useState(false);
+  const [inboxCollapsed, setInboxCollapsed] = useState(false);
+  const effectiveNavCollapsed = navCollapsed && !compact;
+  const effectiveInboxCollapsed = inboxCollapsed && !compact;
+  const styles = useMemo(
+    () =>
+      createStyles(
+        theme,
+        compact,
+        effectiveNavCollapsed,
+        effectiveInboxCollapsed,
+      ),
+    [compact, effectiveInboxCollapsed, effectiveNavCollapsed, theme],
+  );
   const [conversation, setConversation] =
     useState<ConversationView>(lobbyConversation);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [users, setUsers] = useState<PublicUser[]>([]);
+  const [activeSection, setActiveSection] = useState<AppSection>("chat");
   const [handleDraft, setHandleDraft] = useState("");
   const [draft, setDraft] = useState("");
   const [selectedAttachment, setSelectedAttachment] =
@@ -141,7 +169,14 @@ export function ChatScreen({
   const [sending, setSending] = useState(false);
   const [pickingAttachment, setPickingAttachment] =
     useState<AttachmentKind | null>(null);
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [profileDraft, setProfileDraft] = useState({
+    displayName: session.user.displayName,
+    username: session.user.username,
+    handle: session.user.handle,
+    email: session.user.email,
+  });
+  const [savingProfile, setSavingProfile] = useState(false);
+  const [settingsNotice, setSettingsNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [connection, setConnection] = useState<ConnectionState>("connecting");
   const activeRoomRef = useRef(conversation.roomId);
@@ -151,6 +186,20 @@ export function ChatScreen({
   useEffect(() => {
     activeRoomRef.current = conversation.roomId;
   }, [conversation.roomId]);
+
+  useEffect(() => {
+    setProfileDraft({
+      displayName: session.user.displayName,
+      username: session.user.username,
+      handle: session.user.handle,
+      email: session.user.email,
+    });
+  }, [
+    session.user.displayName,
+    session.user.email,
+    session.user.handle,
+    session.user.username,
+  ]);
 
   useEffect(() => {
     let active = true;
@@ -283,15 +332,17 @@ export function ChatScreen({
   const handleOpenLobby = () => {
     setConversation(lobbyConversation);
     setHandleDraft("");
-    setSettingsOpen(false);
+    setActiveSection("home");
     setError(null);
   };
 
   const handleOpenDirectByUser = (user: PublicUser) => {
+    setActiveSection("chat");
     void openDirectConversation(user.handle);
   };
 
   const handleOpenDirectFromDraft = () => {
+    setActiveSection("chat");
     void openDirectConversation(handleDraft);
   };
 
@@ -309,7 +360,7 @@ export function ChatScreen({
     }
 
     setJoining(true);
-    setSettingsOpen(false);
+    setActiveSection("chat");
     setError(null);
 
     try {
@@ -427,6 +478,66 @@ export function ChatScreen({
     }
   };
 
+  const handleProfileDraftChange = (
+    field: keyof typeof profileDraft,
+    value: string,
+  ) => {
+    setSettingsNotice(null);
+    setProfileDraft((current) => ({ ...current, [field]: value }));
+  };
+
+  const handleSaveProfile = async () => {
+    const nextProfile = {
+      displayName: profileDraft.displayName.trim(),
+      username: profileDraft.username.trim(),
+      handle: normalizeHandleInput(profileDraft.handle),
+      email: profileDraft.email.trim(),
+    };
+
+    if (
+      !nextProfile.displayName ||
+      !nextProfile.username ||
+      !nextProfile.handle ||
+      !nextProfile.email
+    ) {
+      setSettingsNotice(null);
+      setError("Complete all profile fields before saving.");
+      return;
+    }
+
+    setSavingProfile(true);
+    setError(null);
+    setSettingsNotice(null);
+
+    try {
+      const nextSession = await onUpdateProfile(nextProfile);
+      setUsers((current) =>
+        current.map((user) =>
+          user.id === nextSession.user.id ? nextSession.user : user,
+        ),
+      );
+      setSettingsNotice("Profile updated.");
+    } catch (saveError) {
+      setError(
+        saveError instanceof Error
+          ? saveError.message
+          : "Unable to update profile.",
+      );
+    } finally {
+      setSavingProfile(false);
+    }
+  };
+
+  const handleSelectSection = (section: AppSection) => {
+    setActiveSection(section);
+    setError(null);
+
+    if (section === "home") {
+      setConversation(lobbyConversation);
+      setHandleDraft("");
+    }
+  };
+
   return (
     <SafeAreaView style={styles.safe}>
       <KeyboardAvoidingView
@@ -435,13 +546,34 @@ export function ChatScreen({
       >
         <View style={styles.appShell}>
           <View style={styles.navRail}>
+            {!compact ? (
+              <Pressable
+                accessibilityLabel={
+                  effectiveNavCollapsed
+                    ? "Expand navigation sidebar"
+                    : "Collapse navigation sidebar"
+                }
+                accessibilityRole="button"
+                onPress={() => setNavCollapsed((current) => !current)}
+                style={({ pressed }) => [
+                  styles.railCollapseButton,
+                  pressed ? styles.pressed : null,
+                ]}
+              >
+                {effectiveNavCollapsed ? (
+                  <ChevronRight color={styles.navIcon.color} size={20} />
+                ) : (
+                  <ChevronLeft color={styles.navIcon.color} size={20} />
+                )}
+              </Pressable>
+            ) : null}
             <View style={styles.profileBlock}>
               <View style={styles.profileAvatar}>
                 <Text style={styles.profileAvatarText}>
                   {session.user.displayName.slice(0, 1).toUpperCase()}
                 </Text>
               </View>
-              {!compact ? (
+              {!compact && !effectiveNavCollapsed ? (
                 <>
                   <Text numberOfLines={1} style={styles.profileName}>
                     {session.user.displayName}
@@ -455,51 +587,51 @@ export function ChatScreen({
 
             <View style={styles.navItems}>
               <NavItem
-                active={false}
-                compact={compact}
+                active={activeSection === "home"}
+                compact={compact || effectiveNavCollapsed}
                 icon={<Home color={styles.navIcon.color} size={18} />}
                 label="Home"
-                onPress={handleOpenLobby}
+                onPress={() => handleSelectSection("home")}
                 styles={styles}
               />
               <NavItem
-                active={!settingsOpen}
-                compact={compact}
+                active={activeSection === "chat"}
+                compact={compact || effectiveNavCollapsed}
                 icon={<MessageCircle color={styles.navIcon.color} size={18} />}
                 label="Chat"
-                onPress={() => setSettingsOpen(false)}
+                onPress={() => handleSelectSection("chat")}
                 styles={styles}
               />
               <NavItem
-                active={false}
-                compact={compact}
+                active={activeSection === "contacts"}
+                compact={compact || effectiveNavCollapsed}
                 icon={<User color={styles.navIcon.color} size={18} />}
                 label="Contact"
-                onPress={() => setSettingsOpen(false)}
+                onPress={() => handleSelectSection("contacts")}
                 styles={styles}
               />
               <NavItem
-                active={false}
-                compact={compact}
+                active={activeSection === "notifications"}
+                compact={compact || effectiveNavCollapsed}
                 icon={<Bell color={styles.navIcon.color} size={18} />}
                 label="Notifications"
-                onPress={() => setSettingsOpen(false)}
+                onPress={() => handleSelectSection("notifications")}
                 styles={styles}
               />
               <NavItem
-                active={false}
-                compact={compact}
+                active={activeSection === "calendar"}
+                compact={compact || effectiveNavCollapsed}
                 icon={<Calendar color={styles.navIcon.color} size={18} />}
                 label="Calendar"
-                onPress={() => setSettingsOpen(false)}
+                onPress={() => handleSelectSection("calendar")}
                 styles={styles}
               />
               <NavItem
-                active={settingsOpen}
-                compact={compact}
+                active={activeSection === "settings"}
+                compact={compact || effectiveNavCollapsed}
                 icon={<Settings color={styles.navIcon.color} size={18} />}
                 label="Settings"
-                onPress={() => setSettingsOpen(true)}
+                onPress={() => handleSelectSection("settings")}
                 styles={styles}
               />
             </View>
@@ -513,142 +645,171 @@ export function ChatScreen({
               ]}
             >
               <LogOut color={styles.navIcon.color} size={19} strokeWidth={2.2} />
-              {!compact ? <Text style={styles.logoutText}>Log Out</Text> : null}
+              {!compact && !effectiveNavCollapsed ? (
+                <Text style={styles.logoutText}>Log Out</Text>
+              ) : null}
             </Pressable>
           </View>
 
           <View style={styles.inboxPanel}>
-            <View style={styles.inboxHeader}>
-              <View>
-                <Text style={styles.inboxTitle}>Chats</Text>
-                <Text style={styles.inboxSubtitle}>Recent Chats</Text>
-              </View>
-              <Pressable
-                accessibilityRole="button"
-                onPress={() => setHandleDraft("@")}
-                style={({ pressed }) => [
-                  styles.newChatButton,
-                  pressed ? styles.pressed : null,
-                ]}
-              >
-                <Plus color="#ffffff" size={17} strokeWidth={2.4} />
-                <Text style={styles.newChatText}>Create New Chat</Text>
-              </Pressable>
-            </View>
-
-            <View style={styles.searchRow}>
-              <Search color={styles.searchIcon.color} size={18} />
-              <TextInput
-                autoCapitalize="none"
-                autoCorrect={false}
-                editable={!joining}
-                onChangeText={setHandleDraft}
-                onSubmitEditing={handleOpenDirectFromDraft}
-                placeholder="Search or enter handle"
-                placeholderTextColor={styles.placeholder.color}
-                returnKeyType="go"
-                style={styles.handleInput}
-                value={handleDraft}
-              />
-              <Pressable
-                accessibilityRole="button"
-                disabled={!canOpenHandle}
-                onPress={handleOpenDirectFromDraft}
-                style={({ pressed }) => [
-                  styles.openButton,
-                  pressed && canOpenHandle ? styles.pressed : null,
-                  !canOpenHandle ? styles.disabled : null,
-                ]}
-              >
-                {joining ? (
-                  <ActivityIndicator color="#ffffff" size="small" />
-                ) : (
-                  <AtSign color="#ffffff" size={17} strokeWidth={2.4} />
-                )}
-              </Pressable>
-            </View>
-
-            {settingsOpen ? (
-              <View style={styles.settingsPanel}>
-                <Text style={styles.settingsTitle}>Settings</Text>
+            {effectiveInboxCollapsed ? (
+              <View style={styles.inboxCollapsedContent}>
                 <Pressable
-                  accessibilityRole="switch"
-                  accessibilityState={{ checked: theme === "dark" }}
-                  onPress={onToggleTheme}
+                  accessibilityLabel="Expand chat list sidebar"
+                  accessibilityRole="button"
+                  onPress={() => setInboxCollapsed(false)}
                   style={({ pressed }) => [
-                    styles.themeRow,
+                    styles.sidebarCollapseButton,
                     pressed ? styles.pressed : null,
                   ]}
                 >
-                  <View style={styles.themeIcon}>
-                    {theme === "dark" ? (
-                      <Moon color="#bfdbfe" size={18} />
-                    ) : (
-                      <Sun color="#f59e0b" size={18} />
-                    )}
-                  </View>
-                  <View style={styles.themeTextBlock}>
-                    <Text style={styles.themeTitle}>Dark theme</Text>
-                    <Text style={styles.themeSubtitle}>
-                      {theme === "dark" ? "Enabled" : "Disabled"}
+                  <ChevronRight color={styles.navIcon.color} size={22} />
+                </Pressable>
+                <MessageCircle color={styles.navIcon.color} size={22} />
+              </View>
+            ) : (
+              <>
+                <View style={styles.inboxHeader}>
+                  <View>
+                    <Text style={styles.inboxTitle}>
+                      {sectionTitle(activeSection)}
+                    </Text>
+                    <Text style={styles.inboxSubtitle}>
+                      {sectionSubtitle(activeSection)}
                     </Text>
                   </View>
-                  <View
-                    style={[
-                      styles.themeSwitch,
-                      theme === "dark" ? styles.themeSwitchOn : null,
-                    ]}
-                  >
-                    <View
-                      style={[
-                        styles.themeKnob,
-                        theme === "dark" ? styles.themeKnobOn : null,
-                      ]}
-                    />
+                  <View style={styles.inboxHeaderActions}>
+                    {activeSection === "chat" ? (
+                      <Pressable
+                        accessibilityRole="button"
+                        onPress={() => {
+                          setActiveSection("chat");
+                          setHandleDraft("@");
+                        }}
+                        style={({ pressed }) => [
+                          styles.newChatButton,
+                          pressed ? styles.pressed : null,
+                        ]}
+                      >
+                        <Plus color="#ffffff" size={17} strokeWidth={2.4} />
+                        <Text style={styles.newChatText}>Create New Chat</Text>
+                      </Pressable>
+                    ) : null}
+                    {!compact ? (
+                      <Pressable
+                        accessibilityLabel="Collapse chat list sidebar"
+                        accessibilityRole="button"
+                        onPress={() => setInboxCollapsed(true)}
+                        style={({ pressed }) => [
+                          styles.sidebarCollapseButton,
+                          pressed ? styles.pressed : null,
+                        ]}
+                      >
+                        <ChevronLeft color={styles.navIcon.color} size={22} />
+                      </Pressable>
+                    ) : null}
                   </View>
-                </Pressable>
-              </View>
-            ) : null}
-
-            <ScrollView
-              contentContainerStyle={styles.conversationList}
-              showsVerticalScrollIndicator={false}
-            >
-              <ConversationCard
-                active={conversation.kind === "lobby"}
-                icon={<Hash color="#ffffff" size={19} strokeWidth={2.4} />}
-                meta="Shared room"
-                onPress={handleOpenLobby}
-                preview="Open conversation"
-                styles={styles}
-                title="Lobby"
-              />
-
-              {visibleUsers.map((user) => (
-                <ConversationCard
-                  active={
-                    conversation.kind === "direct" &&
-                    conversation.participant.id === user.id
-                  }
-                  icon={<Text style={styles.cardAvatarText}>{user.displayName.slice(0, 1).toUpperCase()}</Text>}
-                  key={user.id}
-                  meta={displayHandle(user.handle)}
-                  onPress={() => handleOpenDirectByUser(user)}
-                  preview="Personal chat"
-                  styles={styles}
-                  title={user.displayName}
-                />
-              ))}
-
-              {visibleUsers.length === 0 ? (
-                <View style={styles.noContacts}>
-                  <Text style={styles.noContactsTitle}>No contacts yet</Text>
-                  <Text style={styles.noContactsText}>
-                    New users will appear here after they register.
-                  </Text>
                 </View>
-              ) : null}
-            </ScrollView>
+
+                {activeSection === "chat" ? (
+                  <>
+                    <View style={styles.searchRow}>
+                      <Search color={styles.searchIcon.color} size={18} />
+                      <TextInput
+                        autoCapitalize="none"
+                        autoCorrect={false}
+                        editable={!joining}
+                        onChangeText={setHandleDraft}
+                        onSubmitEditing={handleOpenDirectFromDraft}
+                        placeholder="Search or enter handle"
+                        placeholderTextColor={styles.placeholder.color}
+                        returnKeyType="go"
+                        style={styles.handleInput}
+                        value={handleDraft}
+                      />
+                      <Pressable
+                        accessibilityRole="button"
+                        disabled={!canOpenHandle}
+                        onPress={handleOpenDirectFromDraft}
+                        style={({ pressed }) => [
+                          styles.openButton,
+                          pressed && canOpenHandle ? styles.pressed : null,
+                          !canOpenHandle ? styles.disabled : null,
+                        ]}
+                      >
+                        {joining ? (
+                          <ActivityIndicator color="#ffffff" size="small" />
+                        ) : (
+                          <AtSign color="#ffffff" size={17} strokeWidth={2.4} />
+                        )}
+                      </Pressable>
+                    </View>
+
+                    <ScrollView
+                      contentContainerStyle={styles.conversationList}
+                      showsVerticalScrollIndicator={false}
+                    >
+                      <ConversationCard
+                        active={conversation.kind === "lobby"}
+                        icon={<Hash color="#ffffff" size={19} strokeWidth={2.4} />}
+                        meta="Shared room"
+                        onPress={handleOpenLobby}
+                        preview="Open conversation"
+                        styles={styles}
+                        title="Lobby"
+                      />
+
+                      {visibleUsers.map((user) => (
+                        <ConversationCard
+                          active={
+                            conversation.kind === "direct" &&
+                            conversation.participant.id === user.id
+                          }
+                          icon={
+                            <Text style={styles.cardAvatarText}>
+                              {user.displayName.slice(0, 1).toUpperCase()}
+                            </Text>
+                          }
+                          key={user.id}
+                          meta={displayHandle(user.handle)}
+                          onPress={() => handleOpenDirectByUser(user)}
+                          preview="Personal chat"
+                          styles={styles}
+                          title={user.displayName}
+                        />
+                      ))}
+
+                      {visibleUsers.length === 0 ? (
+                        <View style={styles.noContacts}>
+                          <Text style={styles.noContactsTitle}>No contacts yet</Text>
+                          <Text style={styles.noContactsText}>
+                            New users will appear here after they register.
+                          </Text>
+                        </View>
+                      ) : null}
+                    </ScrollView>
+                  </>
+                ) : (
+                  <SectionPanel
+                    activeSection={activeSection}
+                    connection={connection}
+                    handleOpenDirectByUser={handleOpenDirectByUser}
+                    handleOpenLobby={handleOpenLobby}
+                    handleProfileDraftChange={handleProfileDraftChange}
+                    handleSaveProfile={handleSaveProfile}
+                    onToggleTheme={onToggleTheme}
+                    profileDraft={profileDraft}
+                    savingProfile={savingProfile}
+                    session={session}
+                    settingsNotice={settingsNotice}
+                    statusLabel={statusLabel}
+                    styles={styles}
+                    theme={theme}
+                    users={visibleUsers}
+                  />
+                )}
+              </>
+            )}
           </View>
 
           <View style={styles.chatPanel}>
@@ -701,7 +862,10 @@ export function ChatScreen({
                 <IconButton
                   icon={<MoreVertical color={styles.actionIcon.color} size={20} />}
                   label="Settings"
-                  onPress={() => setSettingsOpen((current) => !current)}
+                  onPress={() => {
+                    setActiveSection("settings");
+                    setInboxCollapsed(false);
+                  }}
                   styles={styles}
                 />
               </View>
@@ -846,6 +1010,351 @@ type NavItemProps = {
   onPress: () => void;
   styles: ReturnType<typeof createStyles>;
 };
+
+type SectionPanelProps = {
+  activeSection: AppSection;
+  connection: ConnectionState;
+  handleOpenDirectByUser: (user: PublicUser) => void;
+  handleOpenLobby: () => void;
+  handleProfileDraftChange: (
+    field: "displayName" | "username" | "handle" | "email",
+    value: string,
+  ) => void;
+  handleSaveProfile: () => Promise<void>;
+  onToggleTheme: () => void;
+  profileDraft: {
+    displayName: string;
+    username: string;
+    handle: string;
+    email: string;
+  };
+  savingProfile: boolean;
+  session: Session;
+  settingsNotice: string | null;
+  statusLabel: string;
+  styles: ReturnType<typeof createStyles>;
+  theme: AppTheme;
+  users: PublicUser[];
+};
+
+function SectionPanel({
+  activeSection,
+  connection,
+  handleOpenDirectByUser,
+  handleOpenLobby,
+  handleProfileDraftChange,
+  handleSaveProfile,
+  onToggleTheme,
+  profileDraft,
+  savingProfile,
+  session,
+  settingsNotice,
+  statusLabel,
+  styles,
+  theme,
+  users,
+}: SectionPanelProps) {
+  if (activeSection === "home") {
+    return (
+      <ScrollView
+        contentContainerStyle={styles.sectionContent}
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={styles.sectionCard}>
+          <Text style={styles.sectionKicker}>Signed in as</Text>
+          <Text style={styles.sectionTitle}>{session.user.displayName}</Text>
+          <Text style={styles.sectionText}>{displayHandle(session.user.handle)}</Text>
+        </View>
+        <SectionAction
+          icon={<Hash color="#ffffff" size={18} />}
+          meta="Shared room"
+          onPress={handleOpenLobby}
+          styles={styles}
+          title="Lobby is open in the main panel"
+        />
+        <View style={styles.statsGrid}>
+          <View style={styles.statCard}>
+            <Text style={styles.statValue}>{users.length}</Text>
+            <Text style={styles.statLabel}>Contacts</Text>
+          </View>
+          <View style={styles.statCard}>
+            <Text style={styles.statValue}>{statusLabel}</Text>
+            <Text style={styles.statLabel}>Connection</Text>
+          </View>
+        </View>
+      </ScrollView>
+    );
+  }
+
+  if (activeSection === "contacts") {
+    return (
+      <ScrollView
+        contentContainerStyle={styles.sectionContent}
+        showsVerticalScrollIndicator={false}
+      >
+        {users.map((user) => (
+          <SectionAction
+            icon={
+              <Text style={styles.cardAvatarText}>
+                {user.displayName.slice(0, 1).toUpperCase()}
+              </Text>
+            }
+            key={user.id}
+            meta={displayHandle(user.handle)}
+            onPress={() => handleOpenDirectByUser(user)}
+            styles={styles}
+            title={user.displayName}
+          />
+        ))}
+        {users.length === 0 ? (
+          <View style={styles.noContacts}>
+            <Text style={styles.noContactsTitle}>No contacts yet</Text>
+            <Text style={styles.noContactsText}>
+              Create another account to see contacts here.
+            </Text>
+          </View>
+        ) : null}
+      </ScrollView>
+    );
+  }
+
+  if (activeSection === "notifications") {
+    return (
+      <ScrollView
+        contentContainerStyle={styles.sectionContent}
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={styles.sectionCard}>
+          <View style={styles.noticeRow}>
+            <Bell color={styles.actionIcon.color} size={20} />
+            <View style={styles.noticeText}>
+              <Text style={styles.sectionTitle}>Live message alerts</Text>
+              <Text style={styles.sectionText}>
+                New room messages appear instantly while the socket is connected.
+              </Text>
+            </View>
+          </View>
+        </View>
+        <View style={styles.sectionCard}>
+          <Text style={styles.sectionKicker}>Socket status</Text>
+          <Text style={styles.sectionTitle}>{statusLabel}</Text>
+          <Text style={styles.sectionText}>
+            {connection === "connected"
+              ? "Messages and room joins are active."
+              : "The client will keep trying to reconnect."}
+          </Text>
+        </View>
+      </ScrollView>
+    );
+  }
+
+  if (activeSection === "calendar") {
+    const today = new Date();
+
+    return (
+      <ScrollView
+        contentContainerStyle={styles.sectionContent}
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={styles.sectionCard}>
+          <Text style={styles.sectionKicker}>Today</Text>
+          <Text style={styles.sectionTitle}>
+            {today.toLocaleDateString(undefined, {
+              day: "numeric",
+              month: "long",
+              weekday: "long",
+            })}
+          </Text>
+          <Text style={styles.sectionText}>
+            Calendar hooks are ready for scheduled chat reminders.
+          </Text>
+        </View>
+        <View style={styles.sectionCard}>
+          <Text style={styles.sectionTitle}>No events scheduled</Text>
+          <Text style={styles.sectionText}>
+            Keep this panel for future meetings, reminders, and message follow-ups.
+          </Text>
+        </View>
+      </ScrollView>
+    );
+  }
+
+  return (
+    <ScrollView
+      contentContainerStyle={styles.sectionContent}
+      showsVerticalScrollIndicator={false}
+    >
+      <View style={styles.settingsPanel}>
+        <Text style={styles.settingsTitle}>Appearance</Text>
+        <Pressable
+          accessibilityRole="switch"
+          accessibilityState={{ checked: theme === "dark" }}
+          onPress={onToggleTheme}
+          style={({ pressed }) => [
+            styles.themeRow,
+            pressed ? styles.pressed : null,
+          ]}
+        >
+          <View style={styles.themeIcon}>
+            {theme === "dark" ? (
+              <Moon color="#bfdbfe" size={18} />
+            ) : (
+              <Sun color="#f59e0b" size={18} />
+            )}
+          </View>
+          <View style={styles.themeTextBlock}>
+            <Text style={styles.themeTitle}>Dark theme</Text>
+            <Text style={styles.themeSubtitle}>
+              {theme === "dark" ? "Enabled" : "Disabled"}
+            </Text>
+          </View>
+          <View
+            style={[
+              styles.themeSwitch,
+              theme === "dark" ? styles.themeSwitchOn : null,
+            ]}
+          >
+            <View
+              style={[
+                styles.themeKnob,
+                theme === "dark" ? styles.themeKnobOn : null,
+              ]}
+            />
+          </View>
+        </Pressable>
+      </View>
+
+      <View style={styles.settingsPanel}>
+        <Text style={styles.settingsTitle}>Edit profile</Text>
+        <SettingsField
+          label="Display name"
+          onChangeText={(value) => handleProfileDraftChange("displayName", value)}
+          placeholder="Your name"
+          styles={styles}
+          value={profileDraft.displayName}
+        />
+        <SettingsField
+          autoCapitalize="none"
+          label="Username"
+          onChangeText={(value) => handleProfileDraftChange("username", value)}
+          placeholder="username"
+          styles={styles}
+          value={profileDraft.username}
+        />
+        <SettingsField
+          autoCapitalize="none"
+          label="Handle"
+          onChangeText={(value) => handleProfileDraftChange("handle", value)}
+          placeholder="@handle"
+          styles={styles}
+          value={profileDraft.handle}
+        />
+        <SettingsField
+          autoCapitalize="none"
+          keyboardType="email-address"
+          label="Email"
+          onChangeText={(value) => handleProfileDraftChange("email", value)}
+          placeholder="you@example.com"
+          styles={styles}
+          value={profileDraft.email}
+        />
+        {settingsNotice ? (
+          <Text style={styles.settingsNotice}>{settingsNotice}</Text>
+        ) : null}
+        <Pressable
+          accessibilityRole="button"
+          disabled={savingProfile}
+          onPress={() => void handleSaveProfile()}
+          style={({ pressed }) => [
+            styles.saveButton,
+            pressed && !savingProfile ? styles.pressed : null,
+            savingProfile ? styles.disabled : null,
+          ]}
+        >
+          {savingProfile ? (
+            <ActivityIndicator color="#ffffff" size="small" />
+          ) : (
+            <Save color="#ffffff" size={18} strokeWidth={2.4} />
+          )}
+          <Text style={styles.saveButtonText}>Save changes</Text>
+        </Pressable>
+      </View>
+    </ScrollView>
+  );
+}
+
+type SectionActionProps = {
+  icon: ReactNode;
+  meta: string;
+  onPress: () => void;
+  styles: ReturnType<typeof createStyles>;
+  title: string;
+};
+
+function SectionAction({
+  icon,
+  meta,
+  onPress,
+  styles,
+  title,
+}: SectionActionProps) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.sectionAction,
+        pressed ? styles.pressed : null,
+      ]}
+    >
+      <View style={styles.cardAvatar}>{icon}</View>
+      <View style={styles.cardText}>
+        <Text numberOfLines={1} style={styles.cardTitle}>
+          {title}
+        </Text>
+        <Text numberOfLines={1} style={styles.cardMeta}>
+          {meta}
+        </Text>
+      </View>
+    </Pressable>
+  );
+}
+
+type SettingsFieldProps = {
+  autoCapitalize?: "none" | "sentences" | "words" | "characters";
+  keyboardType?: "default" | "email-address";
+  label: string;
+  onChangeText: (value: string) => void;
+  placeholder: string;
+  styles: ReturnType<typeof createStyles>;
+  value: string;
+};
+
+function SettingsField({
+  autoCapitalize,
+  keyboardType,
+  label,
+  onChangeText,
+  placeholder,
+  styles,
+  value,
+}: SettingsFieldProps) {
+  return (
+    <View style={styles.settingsField}>
+      <Text style={styles.settingsLabel}>{label}</Text>
+      <TextInput
+        autoCapitalize={autoCapitalize}
+        autoCorrect={false}
+        keyboardType={keyboardType}
+        onChangeText={onChangeText}
+        placeholder={placeholder}
+        placeholderTextColor={styles.placeholder.color}
+        style={styles.settingsInput}
+        value={value}
+      />
+    </View>
+  );
+}
 
 function NavItem({
   active,
@@ -1144,7 +1653,46 @@ function normalizeHandleInput(handle: string) {
   return handle.trim().replace(/^@+/, "").toLowerCase();
 }
 
-function createStyles(theme: AppTheme, compact: boolean) {
+function sectionTitle(section: AppSection) {
+  switch (section) {
+    case "home":
+      return "Home";
+    case "chat":
+      return "Chats";
+    case "contacts":
+      return "Contacts";
+    case "notifications":
+      return "Notifications";
+    case "calendar":
+      return "Calendar";
+    case "settings":
+      return "Settings";
+  }
+}
+
+function sectionSubtitle(section: AppSection) {
+  switch (section) {
+    case "home":
+      return "Account overview";
+    case "chat":
+      return "Recent Chats";
+    case "contacts":
+      return "People by handle";
+    case "notifications":
+      return "Live app status";
+    case "calendar":
+      return "Schedule view";
+    case "settings":
+      return "Profile and preferences";
+  }
+}
+
+function createStyles(
+  theme: AppTheme,
+  compact: boolean,
+  navCollapsed: boolean,
+  inboxCollapsed: boolean,
+) {
   const dark = theme === "dark";
   const page = dark ? "#0f172a" : "#e9eefc";
   const rail = dark ? "#111827" : "#ffffff";
@@ -1185,11 +1733,22 @@ function createStyles(theme: AppTheme, compact: boolean) {
       borderRightColor: compact ? "transparent" : border,
       borderRightWidth: compact ? 0 : 1,
       flexDirection: compact ? "row" : "column",
-      gap: compact ? 6 : 18,
+      gap: compact ? 6 : navCollapsed ? 12 : 18,
       minHeight: compact ? 84 : undefined,
-      paddingHorizontal: compact ? 10 : 22,
+      paddingHorizontal: compact ? 10 : navCollapsed ? 12 : 22,
       paddingVertical: compact ? 10 : 28,
-      width: compact ? "100%" : 250,
+      width: compact ? "100%" : navCollapsed ? 82 : 250,
+    },
+    railCollapseButton: {
+      alignItems: "center",
+      alignSelf: navCollapsed ? "center" : "flex-end",
+      backgroundColor: cardAlt,
+      borderColor: border,
+      borderRadius: 8,
+      borderWidth: 1,
+      height: 38,
+      justifyContent: "center",
+      width: 38,
     },
     profileBlock: {
       alignItems: "center",
@@ -1203,13 +1762,13 @@ function createStyles(theme: AppTheme, compact: boolean) {
       borderColor: dark ? "#60a5fa" : "#bfdbfe",
       borderRadius: 8,
       borderWidth: 1,
-      height: compact ? 42 : 72,
+      height: compact || navCollapsed ? 42 : 72,
       justifyContent: "center",
-      width: compact ? 42 : 72,
+      width: compact || navCollapsed ? 42 : 72,
     },
     profileAvatarText: {
       color: dark ? "#dbeafe" : "#1d4ed8",
-      fontSize: compact ? 18 : 30,
+      fontSize: compact || navCollapsed ? 18 : 30,
       fontWeight: "900",
     },
     profileName: {
@@ -1234,7 +1793,7 @@ function createStyles(theme: AppTheme, compact: boolean) {
     navItem: {
       alignItems: "center",
       borderRadius: 8,
-      flexDirection: compact ? "column" : "row",
+      flexDirection: compact || navCollapsed ? "column" : "row",
       gap: 11,
       minHeight: compact ? 50 : 44,
       paddingHorizontal: compact ? 8 : 10,
@@ -1264,7 +1823,7 @@ function createStyles(theme: AppTheme, compact: boolean) {
     logoutButton: {
       alignItems: "center",
       borderRadius: 8,
-      flexDirection: compact ? "column" : "row",
+      flexDirection: compact || navCollapsed ? "column" : "row",
       gap: 10,
       minHeight: compact ? 50 : 44,
       paddingHorizontal: 10,
@@ -1282,8 +1841,14 @@ function createStyles(theme: AppTheme, compact: boolean) {
       borderRightColor: compact ? "transparent" : border,
       borderRightWidth: compact ? 0 : 1,
       maxHeight: compact ? 360 : undefined,
-      padding: 22,
-      width: compact ? "100%" : 410,
+      padding: inboxCollapsed ? 10 : 22,
+      width: compact ? "100%" : inboxCollapsed ? 72 : 410,
+    },
+    inboxCollapsedContent: {
+      alignItems: "center",
+      flex: 1,
+      gap: 18,
+      paddingTop: 8,
     },
     inboxHeader: {
       alignItems: compact ? "stretch" : "center",
@@ -1291,6 +1856,21 @@ function createStyles(theme: AppTheme, compact: boolean) {
       gap: 14,
       justifyContent: "space-between",
       marginBottom: 18,
+    },
+    inboxHeaderActions: {
+      alignItems: "center",
+      flexDirection: "row",
+      gap: 10,
+    },
+    sidebarCollapseButton: {
+      alignItems: "center",
+      backgroundColor: card,
+      borderColor: border,
+      borderRadius: 8,
+      borderWidth: 1,
+      height: 44,
+      justifyContent: "center",
+      width: 44,
     },
     inboxTitle: {
       color: text,
@@ -1362,9 +1942,123 @@ function createStyles(theme: AppTheme, compact: boolean) {
       marginTop: 14,
       padding: 14,
     },
+    sectionContent: {
+      gap: 14,
+      paddingBottom: 22,
+      paddingTop: 2,
+    },
+    sectionCard: {
+      backgroundColor: card,
+      borderColor: border,
+      borderRadius: 8,
+      borderWidth: 1,
+      padding: 16,
+    },
+    sectionKicker: {
+      color: blue,
+      fontSize: 12,
+      fontWeight: "900",
+      marginBottom: 7,
+      textTransform: "uppercase",
+    },
+    sectionTitle: {
+      color: text,
+      fontSize: 17,
+      fontWeight: "900",
+      lineHeight: 22,
+    },
+    sectionText: {
+      color: muted,
+      fontSize: 13,
+      lineHeight: 19,
+      marginTop: 6,
+    },
+    sectionAction: {
+      alignItems: "center",
+      backgroundColor: card,
+      borderColor: border,
+      borderRadius: 8,
+      borderWidth: 1,
+      flexDirection: "row",
+      gap: 13,
+      minHeight: 72,
+      padding: 14,
+    },
+    statsGrid: {
+      flexDirection: "row",
+      gap: 12,
+    },
+    statCard: {
+      backgroundColor: card,
+      borderColor: border,
+      borderRadius: 8,
+      borderWidth: 1,
+      flex: 1,
+      minHeight: 78,
+      padding: 14,
+    },
+    statValue: {
+      color: text,
+      fontSize: 18,
+      fontWeight: "900",
+    },
+    statLabel: {
+      color: muted,
+      fontSize: 12,
+      fontWeight: "800",
+      marginTop: 5,
+    },
+    noticeRow: {
+      alignItems: "flex-start",
+      flexDirection: "row",
+      gap: 12,
+    },
+    noticeText: {
+      flex: 1,
+      minWidth: 0,
+    },
     settingsTitle: {
       color: text,
       fontSize: 16,
+      fontWeight: "900",
+    },
+    settingsField: {
+      gap: 7,
+    },
+    settingsLabel: {
+      color: text,
+      fontSize: 12,
+      fontWeight: "900",
+    },
+    settingsInput: {
+      backgroundColor: cardAlt,
+      borderColor: border,
+      borderRadius: 8,
+      borderWidth: 1,
+      color: text,
+      fontSize: 14,
+      minHeight: 44,
+      paddingHorizontal: 12,
+      paddingVertical: 8,
+    },
+    settingsNotice: {
+      color: dark ? "#bbf7d0" : "#166534",
+      fontSize: 13,
+      fontWeight: "800",
+    },
+    saveButton: {
+      alignItems: "center",
+      backgroundColor: blue,
+      borderRadius: 8,
+      flexDirection: "row",
+      gap: 8,
+      justifyContent: "center",
+      minHeight: 46,
+      paddingHorizontal: 14,
+    },
+    saveButtonText: {
+      color: "#ffffff",
+      fontSize: 14,
       fontWeight: "900",
     },
     themeRow: {

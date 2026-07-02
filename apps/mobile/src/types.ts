@@ -42,6 +42,13 @@ export type RegisterInput = {
   password: string;
 };
 
+export type ProfileUpdateInput = {
+  username?: string;
+  handle?: string;
+  email?: string;
+  displayName?: string;
+};
+
 export type DirectConversation = {
   roomId: string;
   type: "direct";

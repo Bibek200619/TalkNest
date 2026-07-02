@@ -5,7 +5,7 @@ import { toPublicUser, type TalkNestDatabase } from "./database.js";
 import { ConflictError, UnauthorizedError } from "./errors.js";
 import type { AppConfig } from "./config.js";
 import { normalizeHandle } from "./rooms.js";
-import type { RegisterInput } from "./schemas.js";
+import type { ProfileUpdateInput, RegisterInput } from "./schemas.js";
 import type { AuthTokenPayload, PublicUser } from "./types.js";
 
 declare global {
@@ -56,6 +56,50 @@ export class AuthService {
       displayName: input.displayName,
       passwordHash: bcrypt.hashSync(input.password, 10),
     });
+
+    return this.createSession(toPublicUser(user));
+  }
+
+  updateProfile(currentUser: PublicUser, input: ProfileUpdateInput) {
+    const username = input.username?.trim().toLowerCase();
+    const email = input.email?.trim().toLowerCase();
+    const handle = input.handle ? normalizeHandle(input.handle) : undefined;
+
+    if (username) {
+      const existing = this.db.findUserByUsername(username);
+
+      if (existing && existing.id !== currentUser.id) {
+        throw new ConflictError("Username is already taken");
+      }
+    }
+
+    if (handle) {
+      const existing = this.db.findUserByHandle(handle);
+
+      if (existing && existing.id !== currentUser.id) {
+        throw new ConflictError("Handle is already taken");
+      }
+    }
+
+    if (email) {
+      const existing = this.db.findUserByEmail(email);
+
+      if (existing && existing.id !== currentUser.id) {
+        throw new ConflictError("Email is already registered");
+      }
+    }
+
+    const user = this.db.updateUserProfile({
+      userId: currentUser.id,
+      username,
+      email,
+      handle,
+      displayName: input.displayName,
+    });
+
+    if (!user) {
+      throw new UnauthorizedError("Session user no longer exists");
+    }
 
     return this.createSession(toPublicUser(user));
   }

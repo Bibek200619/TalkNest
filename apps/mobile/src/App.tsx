@@ -4,6 +4,7 @@ import {
   fetchCurrentUser,
   login as loginRequest,
   register as registerRequest,
+  updateProfile as updateProfileRequest,
 } from "./api";
 import { ChatScreen } from "./components/ChatScreen";
 import { LoginScreen } from "./components/LoginScreen";
@@ -14,7 +15,7 @@ import {
   saveSession,
   saveTheme,
 } from "./storage";
-import type { AppTheme, RegisterInput, Session } from "./types";
+import type { AppTheme, ProfileUpdateInput, RegisterInput, Session } from "./types";
 
 type KeyboardShortcutEvent = {
   ctrlKey?: boolean;
@@ -143,6 +144,18 @@ export default function App() {
     setAuthError(null);
   };
 
+  const handleUpdateProfile = async (input: ProfileUpdateInput) => {
+    if (!session) {
+      throw new Error("You need to sign in again.");
+    }
+
+    const nextSession = await updateProfileRequest(session.token, input);
+    await saveSession(nextSession);
+    setSession(nextSession);
+
+    return nextSession;
+  };
+
   if (booting) {
     return (
       <SafeAreaView
@@ -159,6 +172,7 @@ export default function App() {
         session={session}
         onLogout={handleLogout}
         onToggleTheme={toggleTheme}
+        onUpdateProfile={handleUpdateProfile}
         theme={theme}
       />
     );

@@ -122,6 +122,69 @@ describe("TalkNest server", () => {
     );
   });
 
+  it("updates the authenticated user profile", async () => {
+    const priya = await registerUser({
+      username: "priya",
+      handle: "priya",
+      email: "priya@talknest.test",
+      displayName: "Priya Shah",
+    });
+
+    const response = await request(runtime.httpServer)
+      .patch("/api/auth/me")
+      .set("Authorization", `Bearer ${priya.token}`)
+      .send({
+        username: "priya-new",
+        handle: "@priya-updated",
+        email: "priya.updated@talknest.test",
+        displayName: "Priya Updated",
+      })
+      .expect(200);
+
+    expect(response.body.token).toEqual(expect.any(String));
+    expect(response.body.user).toMatchObject({
+      id: priya.user.id,
+      username: "priya-new",
+      handle: "priya-updated",
+      email: "priya.updated@talknest.test",
+      displayName: "Priya Updated",
+    });
+
+    const me = await request(runtime.httpServer)
+      .get("/api/auth/me")
+      .set("Authorization", `Bearer ${response.body.token}`)
+      .expect(200);
+
+    expect(me.body.user).toMatchObject({
+      username: "priya-new",
+      handle: "priya-updated",
+      displayName: "Priya Updated",
+    });
+  });
+
+  it("rejects duplicate handles during profile updates", async () => {
+    const priya = await registerUser({
+      username: "priya",
+      handle: "priya",
+      email: "priya@talknest.test",
+      displayName: "Priya Shah",
+    });
+    await registerUser({
+      username: "noah",
+      handle: "noah",
+      email: "noah@talknest.test",
+      displayName: "Noah Kim",
+    });
+
+    const response = await request(runtime.httpServer)
+      .patch("/api/auth/me")
+      .set("Authorization", `Bearer ${priya.token}`)
+      .send({ handle: "noah" })
+      .expect(409);
+
+    expect(response.body.error.message).toBe("Handle is already taken");
+  });
+
   it("resolves personal conversations by handle", async () => {
     const priya = await registerUser({
       username: "priya",
