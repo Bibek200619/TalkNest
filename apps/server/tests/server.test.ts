@@ -229,6 +229,109 @@ describe("TalkNest server", () => {
     socket.close();
   });
 
+  it("broadcasts allowed attachment messages", async () => {
+    const priya = await registerUser({
+      username: "priya",
+      handle: "priya",
+      email: "priya@talknest.test",
+      displayName: "Priya Shah",
+    });
+    const noah = await registerUser({
+      username: "noah",
+      handle: "noah",
+      email: "noah@talknest.test",
+      displayName: "Noah Kim",
+    });
+    const priyaSocket = await connectSocket(priya.token);
+    const noahSocket = await connectSocket(noah.token);
+    const received = waitForMessage(noahSocket);
+
+    const ack = await emitMessage(priyaSocket, {
+      roomId: "lobby",
+      text: "Design notes attached",
+      attachment: {
+        kind: "document",
+        fileName: "brief.pdf",
+        mimeType: "application/pdf",
+        size: 128,
+        dataUrl: "data:application/pdf;base64,JVBERi0xLjQ=",
+      },
+    });
+
+    expect(ack.ok).toBe(true);
+    const message = await received;
+
+    expect(message).toMatchObject({
+      senderId: priya.user.id,
+      text: "Design notes attached",
+      type: "attachment",
+      roomId: "lobby",
+      attachment: {
+        kind: "document",
+        fileName: "brief.pdf",
+        mimeType: "application/pdf",
+        size: 128,
+      },
+    });
+
+    const history = await request(runtime.httpServer)
+      .get("/api/messages")
+      .set("Authorization", `Bearer ${noah.token}`)
+      .query({ roomId: "lobby" })
+      .expect(200);
+
+    expect(history.body.messages[0]).toMatchObject({
+      type: "attachment",
+      attachment: {
+        fileName: "brief.pdf",
+      },
+    });
+
+    priyaSocket.close();
+    noahSocket.close();
+  });
+
+  it("rejects unsupported and oversized attachments", async () => {
+    const priya = await registerUser({
+      username: "priya",
+      handle: "priya",
+      email: "priya@talknest.test",
+      displayName: "Priya Shah",
+    });
+    const socket = await connectSocket(priya.token);
+
+    await expect(
+      emitMessage(socket, {
+        roomId: "lobby",
+        attachment: {
+          kind: "document",
+          fileName: "script.sh",
+          mimeType: "application/x-sh",
+          size: 20,
+          dataUrl: "data:application/x-sh;base64,ZWNobyBoaQ==",
+        },
+      }),
+    ).resolves.toEqual({ ok: false, error: "Unsupported attachment type" });
+
+    await expect(
+      emitMessage(socket, {
+        roomId: "lobby",
+        attachment: {
+          kind: "document",
+          fileName: "huge.pdf",
+          mimeType: "application/pdf",
+          size: 3 * 1024 * 1024,
+          dataUrl: "data:application/pdf;base64,JVBERi0xLjQ=",
+        },
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      error: "Attachment exceeds 2 MB limit",
+    });
+
+    socket.close();
+  });
+
   it("broadcasts direct messages only in the resolved personal room", async () => {
     const priya = await registerUser({
       username: "priya",
@@ -398,7 +501,17 @@ describe("TalkNest server", () => {
 
   function emitMessage(
     socket: Socket,
-    payload: { roomId: string; text: string },
+    payload: {
+      roomId: string;
+      text?: string;
+      attachment?: {
+        kind: "image" | "video" | "document";
+        fileName: string;
+        mimeType: string;
+        size: number;
+        dataUrl: string;
+      };
+    },
   ) {
     return new Promise<
       { ok: true; message: ChatMessage } | { ok: false; error: string }

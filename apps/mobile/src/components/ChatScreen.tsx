@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   ActivityIndicator,
   FlatList,
@@ -13,21 +13,40 @@ import {
   useWindowDimensions,
   View,
 } from "react-native";
+import * as DocumentPicker from "expo-document-picker";
 import { io, type Socket } from "socket.io-client";
 import {
   AtSign,
+  Bell,
+  Calendar,
+  FileText,
   Hash,
+  Home,
+  Image as ImageIcon,
   LogOut,
   MessageCircle,
+  Moon,
+  MoreVertical,
+  Paperclip,
+  Plus,
   Search,
   Send,
+  Settings,
+  Smile,
+  Sun,
+  User,
   Users,
+  Video,
   Wifi,
   WifiOff,
+  X,
 } from "lucide-react-native";
 import { fetchMessages, fetchUsers, resolveDirectConversation } from "../api";
 import { ROOM_ID, SOCKET_URL } from "../config";
 import type {
+  AppTheme,
+  AttachmentKind,
+  ChatAttachment,
   ChatMessage,
   ConnectionState,
   PublicUser,
@@ -38,6 +57,8 @@ import { MessageBubble } from "./MessageBubble";
 type Props = {
   session: Session;
   onLogout: () => Promise<void>;
+  onToggleTheme: () => void;
+  theme: AppTheme;
 };
 
 type ConversationView =
@@ -57,9 +78,20 @@ type ConversationView =
     };
 
 type SendAck =
-  { ok: true; message: ChatMessage } | { ok: false; error: string };
+  | { ok: true; message: ChatMessage }
+  | { ok: false; error: string };
 
 type RoomJoinAck = { ok: true; roomId: string } | { ok: false; error: string };
+
+type FileReaderLike = {
+  error?: unknown;
+  onerror: null | (() => void);
+  onloadend: null | (() => void);
+  result?: string | ArrayBuffer | null;
+  readAsDataURL: (blob: unknown) => void;
+};
+
+type FileReaderConstructor = new () => FileReaderLike;
 
 const lobbyConversation: ConversationView = {
   kind: "lobby",
@@ -68,18 +100,48 @@ const lobbyConversation: ConversationView = {
   subtitle: "Shared room",
 };
 
-export function ChatScreen({ session, onLogout }: Props) {
+const attachmentLimits: Record<AttachmentKind, number> = {
+  image: 4 * 1024 * 1024,
+  video: 4 * 1024 * 1024,
+  document: 2 * 1024 * 1024,
+};
+
+const allowedAttachmentMimeTypes: Record<AttachmentKind, string[]> = {
+  image: ["image/jpeg", "image/png", "image/webp", "image/gif"],
+  video: ["video/mp4", "video/quicktime", "video/webm"],
+  document: [
+    "application/pdf",
+    "application/msword",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.ms-powerpoint",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "text/plain",
+  ],
+};
+
+export function ChatScreen({
+  session,
+  onLogout,
+  onToggleTheme,
+  theme,
+}: Props) {
   const { width } = useWindowDimensions();
-  const compact = width < 760;
+  const compact = width < 900;
+  const styles = useMemo(() => createStyles(theme, compact), [compact, theme]);
   const [conversation, setConversation] =
     useState<ConversationView>(lobbyConversation);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [users, setUsers] = useState<PublicUser[]>([]);
   const [handleDraft, setHandleDraft] = useState("");
   const [draft, setDraft] = useState("");
+  const [selectedAttachment, setSelectedAttachment] =
+    useState<ChatAttachment | null>(null);
   const [loading, setLoading] = useState(true);
   const [joining, setJoining] = useState(false);
   const [sending, setSending] = useState(false);
+  const [pickingAttachment, setPickingAttachment] =
+    useState<AttachmentKind | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [connection, setConnection] = useState<ConnectionState>("connecting");
   const activeRoomRef = useRef(conversation.roomId);
@@ -206,7 +268,7 @@ export function ChatScreen({ session, onLogout }: Props) {
     () => users.filter((user) => user.id !== session.user.id),
     [session.user.id, users],
   );
-  const canSend = draft.trim().length > 0 && !sending;
+  const canSend = (!!draft.trim() || !!selectedAttachment) && !sending;
   const canOpenHandle = handleDraft.trim().length > 0 && !joining;
   const statusLabel = useMemo(() => connectionText(connection), [connection]);
   const emptyTitle =
@@ -221,6 +283,7 @@ export function ChatScreen({ session, onLogout }: Props) {
   const handleOpenLobby = () => {
     setConversation(lobbyConversation);
     setHandleDraft("");
+    setSettingsOpen(false);
     setError(null);
   };
 
@@ -246,6 +309,7 @@ export function ChatScreen({ session, onLogout }: Props) {
     }
 
     setJoining(true);
+    setSettingsOpen(false);
     setError(null);
 
     try {
@@ -274,8 +338,9 @@ export function ChatScreen({ session, onLogout }: Props) {
 
   const handleSend = () => {
     const text = draft.trim();
+    const attachment = selectedAttachment;
 
-    if (!text) {
+    if (!text && !attachment) {
       setError("Message cannot be empty.");
       return;
     }
@@ -289,18 +354,77 @@ export function ChatScreen({ session, onLogout }: Props) {
 
     setSending(true);
     setDraft("");
+    setSelectedAttachment(null);
     socket.emit(
       "message:send",
-      { roomId: conversation.roomId, text },
+      { roomId: conversation.roomId, text, attachment },
       (ack: SendAck) => {
         setSending(false);
 
         if (!ack.ok) {
           setDraft(text);
+          setSelectedAttachment(attachment);
           setError(ack.error || "Message failed to send.");
         }
       },
     );
+  };
+
+  const pickAttachment = async (kind: AttachmentKind) => {
+    setPickingAttachment(kind);
+    setError(null);
+
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        copyToCacheDirectory: true,
+        multiple: false,
+        type: allowedAttachmentMimeTypes[kind],
+      });
+
+      if (result.canceled) {
+        return;
+      }
+
+      const asset = result.assets[0];
+
+      if (!asset) {
+        return;
+      }
+
+      const mimeType = asset.mimeType ?? inferMimeType(asset.name);
+
+      if (!allowedAttachmentMimeTypes[kind].includes(mimeType)) {
+        setError("Unsupported attachment type.");
+        return;
+      }
+
+      const file = await readAssetAsDataUrl(asset, mimeType);
+
+      if (file.size > attachmentLimits[kind]) {
+        setError(
+          `${labelForAttachment(kind)} must be ${formatFileSize(
+            attachmentLimits[kind],
+          )} or smaller.`,
+        );
+        return;
+      }
+
+      setSelectedAttachment({
+        kind,
+        fileName: asset.name || `${kind}-attachment`,
+        mimeType,
+        size: file.size,
+        dataUrl: normalizeDataUrl(file.dataUrl, mimeType),
+      });
+    } catch (pickError) {
+      setError(
+        pickError instanceof Error
+          ? pickError.message
+          : "Unable to attach this file.",
+      );
+    } finally {
+      setPickingAttachment(null);
+    }
   };
 
   return (
@@ -309,35 +433,111 @@ export function ChatScreen({ session, onLogout }: Props) {
         behavior={Platform.select({ ios: "padding", default: undefined })}
         style={styles.keyboard}
       >
-        <View
-          style={[styles.appShell, compact ? styles.appShellCompact : null]}
-        >
-          <View
-            style={[styles.sidebar, compact ? styles.sidebarCompact : null]}
-          >
-            <View style={styles.sidebarHeader}>
-              <View>
-                <Text style={styles.brand}>TalkNest</Text>
-                <Text style={styles.accountHandle}>
-                  {displayHandle(session.user.handle)}
+        <View style={styles.appShell}>
+          <View style={styles.navRail}>
+            <View style={styles.profileBlock}>
+              <View style={styles.profileAvatar}>
+                <Text style={styles.profileAvatarText}>
+                  {session.user.displayName.slice(0, 1).toUpperCase()}
                 </Text>
               </View>
-              <View
-                style={[
-                  styles.statusDot,
-                  connection === "connected" ? styles.statusDotOn : null,
-                ]}
-              >
-                {connection === "connected" ? (
-                  <Wifi color="#1f6f58" size={15} />
-                ) : (
-                  <WifiOff color="#a04737" size={15} />
-                )}
-              </View>
+              {!compact ? (
+                <>
+                  <Text numberOfLines={1} style={styles.profileName}>
+                    {session.user.displayName}
+                  </Text>
+                  <Text numberOfLines={1} style={styles.profileHandle}>
+                    {displayHandle(session.user.handle)}
+                  </Text>
+                </>
+              ) : null}
             </View>
 
-            <View style={styles.handleSearch}>
-              <Search color="#557168" size={18} />
+            <View style={styles.navItems}>
+              <NavItem
+                active={false}
+                compact={compact}
+                icon={<Home color={styles.navIcon.color} size={18} />}
+                label="Home"
+                onPress={handleOpenLobby}
+                styles={styles}
+              />
+              <NavItem
+                active={!settingsOpen}
+                compact={compact}
+                icon={<MessageCircle color={styles.navIcon.color} size={18} />}
+                label="Chat"
+                onPress={() => setSettingsOpen(false)}
+                styles={styles}
+              />
+              <NavItem
+                active={false}
+                compact={compact}
+                icon={<User color={styles.navIcon.color} size={18} />}
+                label="Contact"
+                onPress={() => setSettingsOpen(false)}
+                styles={styles}
+              />
+              <NavItem
+                active={false}
+                compact={compact}
+                icon={<Bell color={styles.navIcon.color} size={18} />}
+                label="Notifications"
+                onPress={() => setSettingsOpen(false)}
+                styles={styles}
+              />
+              <NavItem
+                active={false}
+                compact={compact}
+                icon={<Calendar color={styles.navIcon.color} size={18} />}
+                label="Calendar"
+                onPress={() => setSettingsOpen(false)}
+                styles={styles}
+              />
+              <NavItem
+                active={settingsOpen}
+                compact={compact}
+                icon={<Settings color={styles.navIcon.color} size={18} />}
+                label="Settings"
+                onPress={() => setSettingsOpen(true)}
+                styles={styles}
+              />
+            </View>
+
+            <Pressable
+              accessibilityRole="button"
+              onPress={onLogout}
+              style={({ pressed }) => [
+                styles.logoutButton,
+                pressed ? styles.pressed : null,
+              ]}
+            >
+              <LogOut color={styles.navIcon.color} size={19} strokeWidth={2.2} />
+              {!compact ? <Text style={styles.logoutText}>Log Out</Text> : null}
+            </Pressable>
+          </View>
+
+          <View style={styles.inboxPanel}>
+            <View style={styles.inboxHeader}>
+              <View>
+                <Text style={styles.inboxTitle}>Chats</Text>
+                <Text style={styles.inboxSubtitle}>Recent Chats</Text>
+              </View>
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => setHandleDraft("@")}
+                style={({ pressed }) => [
+                  styles.newChatButton,
+                  pressed ? styles.pressed : null,
+                ]}
+              >
+                <Plus color="#ffffff" size={17} strokeWidth={2.4} />
+                <Text style={styles.newChatText}>Create New Chat</Text>
+              </Pressable>
+            </View>
+
+            <View style={styles.searchRow}>
+              <Search color={styles.searchIcon.color} size={18} />
               <TextInput
                 autoCapitalize="none"
                 autoCorrect={false}
@@ -345,7 +545,7 @@ export function ChatScreen({ session, onLogout }: Props) {
                 onChangeText={setHandleDraft}
                 onSubmitEditing={handleOpenDirectFromDraft}
                 placeholder="Search or enter handle"
-                placeholderTextColor="#7a8e86"
+                placeholderTextColor={styles.placeholder.color}
                 returnKeyType="go"
                 style={styles.handleInput}
                 value={handleDraft}
@@ -356,40 +556,86 @@ export function ChatScreen({ session, onLogout }: Props) {
                 onPress={handleOpenDirectFromDraft}
                 style={({ pressed }) => [
                   styles.openButton,
-                  pressed && canOpenHandle ? styles.buttonPressed : null,
-                  !canOpenHandle ? styles.openDisabled : null,
+                  pressed && canOpenHandle ? styles.pressed : null,
+                  !canOpenHandle ? styles.disabled : null,
                 ]}
               >
                 {joining ? (
-                  <ActivityIndicator color="#f8faf7" size="small" />
+                  <ActivityIndicator color="#ffffff" size="small" />
                 ) : (
-                  <MessageCircle color="#f8faf7" size={17} strokeWidth={2.4} />
+                  <AtSign color="#ffffff" size={17} strokeWidth={2.4} />
                 )}
               </Pressable>
             </View>
+
+            {settingsOpen ? (
+              <View style={styles.settingsPanel}>
+                <Text style={styles.settingsTitle}>Settings</Text>
+                <Pressable
+                  accessibilityRole="switch"
+                  accessibilityState={{ checked: theme === "dark" }}
+                  onPress={onToggleTheme}
+                  style={({ pressed }) => [
+                    styles.themeRow,
+                    pressed ? styles.pressed : null,
+                  ]}
+                >
+                  <View style={styles.themeIcon}>
+                    {theme === "dark" ? (
+                      <Moon color="#bfdbfe" size={18} />
+                    ) : (
+                      <Sun color="#f59e0b" size={18} />
+                    )}
+                  </View>
+                  <View style={styles.themeTextBlock}>
+                    <Text style={styles.themeTitle}>Dark theme</Text>
+                    <Text style={styles.themeSubtitle}>
+                      {theme === "dark" ? "Enabled" : "Disabled"}
+                    </Text>
+                  </View>
+                  <View
+                    style={[
+                      styles.themeSwitch,
+                      theme === "dark" ? styles.themeSwitchOn : null,
+                    ]}
+                  >
+                    <View
+                      style={[
+                        styles.themeKnob,
+                        theme === "dark" ? styles.themeKnobOn : null,
+                      ]}
+                    />
+                  </View>
+                </Pressable>
+              </View>
+            ) : null}
 
             <ScrollView
               contentContainerStyle={styles.conversationList}
               showsVerticalScrollIndicator={false}
             >
-              <ConversationRow
+              <ConversationCard
                 active={conversation.kind === "lobby"}
-                icon="lobby"
+                icon={<Hash color="#ffffff" size={19} strokeWidth={2.4} />}
+                meta="Shared room"
                 onPress={handleOpenLobby}
-                subtitle="Shared room"
+                preview="Open conversation"
+                styles={styles}
                 title="Lobby"
               />
 
               {visibleUsers.map((user) => (
-                <ConversationRow
+                <ConversationCard
                   active={
                     conversation.kind === "direct" &&
                     conversation.participant.id === user.id
                   }
-                  icon="direct"
+                  icon={<Text style={styles.cardAvatarText}>{user.displayName.slice(0, 1).toUpperCase()}</Text>}
                   key={user.id}
+                  meta={displayHandle(user.handle)}
                   onPress={() => handleOpenDirectByUser(user)}
-                  subtitle={displayHandle(user.handle)}
+                  preview="Personal chat"
+                  styles={styles}
                   title={user.displayName}
                 />
               ))}
@@ -398,69 +644,72 @@ export function ChatScreen({ session, onLogout }: Props) {
                 <View style={styles.noContacts}>
                   <Text style={styles.noContactsTitle}>No contacts yet</Text>
                   <Text style={styles.noContactsText}>
-                    Ask another user to create an account, then open their
-                    handle here.
+                    New users will appear here after they register.
                   </Text>
                 </View>
               ) : null}
             </ScrollView>
-
-            <View style={styles.sidebarFooter}>
-              <View style={styles.avatar}>
-                <Text style={styles.avatarText}>
-                  {session.user.displayName.slice(0, 1).toUpperCase()}
-                </Text>
-              </View>
-              <View style={styles.footerUser}>
-                <Text style={styles.footerName}>
-                  {session.user.displayName}
-                </Text>
-                <Text style={styles.footerStatus}>{statusLabel}</Text>
-              </View>
-              <Pressable
-                accessibilityRole="button"
-                onPress={onLogout}
-                style={({ pressed }) => [
-                  styles.logoutButton,
-                  pressed ? styles.buttonPressed : null,
-                ]}
-              >
-                <LogOut color="#243a33" size={19} strokeWidth={2.3} />
-              </Pressable>
-            </View>
           </View>
 
           <View style={styles.chatPanel}>
             <View style={styles.chatHeader}>
-              <View style={styles.chatTitleBlock}>
-                <Text style={styles.chatTitle}>{conversation.title}</Text>
-                <Text style={styles.chatSubtitle}>{conversation.subtitle}</Text>
+              <View style={styles.chatIdentity}>
+                <View style={styles.chatAvatar}>
+                  <Text style={styles.chatAvatarText}>
+                    {conversation.title.slice(0, 1).toUpperCase()}
+                  </Text>
+                </View>
+                <View style={styles.chatTitleBlock}>
+                  <Text numberOfLines={1} style={styles.chatTitle}>
+                    {conversation.title}
+                  </Text>
+                  <Text numberOfLines={1} style={styles.chatSubtitle}>
+                    {conversation.kind === "direct"
+                      ? conversation.subtitle
+                      : statusLabel}
+                  </Text>
+                </View>
               </View>
-              <View
-                style={[
-                  styles.statusPill,
-                  connection === "connected" ? styles.statusPillOn : null,
-                ]}
-              >
-                {connection === "connected" ? (
-                  <Wifi color="#1f6f58" size={14} />
-                ) : (
-                  <WifiOff color="#a04737" size={14} />
-                )}
-                <Text
+              <View style={styles.chatActions}>
+                <View
                   style={[
-                    styles.statusText,
-                    connection === "connected" ? styles.statusTextOn : null,
+                    styles.statusPill,
+                    connection === "connected" ? styles.statusPillOn : null,
                   ]}
                 >
-                  {statusLabel}
-                </Text>
+                  {connection === "connected" ? (
+                    <Wifi color="#16a34a" size={14} />
+                  ) : (
+                    <WifiOff color="#dc2626" size={14} />
+                  )}
+                  <Text
+                    style={[
+                      styles.statusText,
+                      connection === "connected" ? styles.statusTextOn : null,
+                    ]}
+                  >
+                    {statusLabel}
+                  </Text>
+                </View>
+                <IconButton
+                  busy={pickingAttachment === "document"}
+                  icon={<Paperclip color={styles.actionIcon.color} size={19} />}
+                  label="Attach file"
+                  onPress={() => void pickAttachment("document")}
+                  styles={styles}
+                />
+                <IconButton
+                  icon={<MoreVertical color={styles.actionIcon.color} size={20} />}
+                  label="Settings"
+                  onPress={() => setSettingsOpen((current) => !current)}
+                  styles={styles}
+                />
               </View>
             </View>
 
             {loading ? (
               <View style={styles.center}>
-                <ActivityIndicator color="#143f37" />
+                <ActivityIndicator color="#2f80ed" />
               </View>
             ) : (
               <FlatList
@@ -478,11 +727,12 @@ export function ChatScreen({ session, onLogout }: Props) {
                   <MessageBubble
                     message={item}
                     own={item.senderId === session.user.id}
+                    theme={theme}
                   />
                 )}
                 ListEmptyComponent={
                   <View style={styles.empty}>
-                    <Users color="#6f8c83" size={28} />
+                    <Users color={styles.emptyIcon.color} size={30} />
                     <Text style={styles.emptyTitle}>{emptyTitle}</Text>
                     <Text style={styles.emptyText}>{emptyText}</Text>
                   </View>
@@ -490,37 +740,96 @@ export function ChatScreen({ session, onLogout }: Props) {
               />
             )}
 
-            {error && <Text style={styles.error}>{error}</Text>}
+            {error ? (
+              <View style={styles.errorWrap}>
+                <Text style={styles.error}>{error}</Text>
+              </View>
+            ) : null}
 
-            <View style={styles.composer}>
-              <TextInput
-                multiline
-                onChangeText={setDraft}
-                placeholder={
-                  conversation.kind === "direct"
-                    ? `Message ${conversation.subtitle}`
-                    : "Message lobby"
-                }
-                placeholderTextColor="#788a84"
-                style={styles.messageInput}
-                value={draft}
-              />
-              <Pressable
-                accessibilityRole="button"
-                disabled={!canSend}
-                onPress={handleSend}
-                style={({ pressed }) => [
-                  styles.sendButton,
-                  pressed && canSend ? styles.buttonPressed : null,
-                  !canSend ? styles.sendDisabled : null,
-                ]}
-              >
-                {sending ? (
-                  <ActivityIndicator color="#f8faf7" />
-                ) : (
-                  <Send color="#f8faf7" size={20} strokeWidth={2.4} />
-                )}
-              </Pressable>
+            <View style={styles.composerWrap}>
+              {selectedAttachment ? (
+                <View style={styles.attachmentPreview}>
+                  <View style={styles.attachmentPreviewIcon}>
+                    {renderComposerAttachmentIcon(
+                      selectedAttachment.kind,
+                      styles.attachmentPreviewIconColor.color,
+                    )}
+                  </View>
+                  <View style={styles.attachmentPreviewText}>
+                    <Text numberOfLines={1} style={styles.attachmentName}>
+                      {selectedAttachment.fileName}
+                    </Text>
+                    <Text style={styles.attachmentMeta}>
+                      {formatFileSize(selectedAttachment.size)}
+                    </Text>
+                  </View>
+                  <Pressable
+                    accessibilityRole="button"
+                    onPress={() => setSelectedAttachment(null)}
+                    style={({ pressed }) => [
+                      styles.clearAttachment,
+                      pressed ? styles.pressed : null,
+                    ]}
+                  >
+                    <X color={styles.mutedIcon.color} size={17} />
+                  </Pressable>
+                </View>
+              ) : null}
+
+              <View style={styles.composer}>
+                <View style={styles.attachmentRail}>
+                  <AttachmentButton
+                    busy={pickingAttachment === "image"}
+                    icon={<ImageIcon color="#ffffff" size={18} />}
+                    onPress={() => void pickAttachment("image")}
+                    styles={styles}
+                  />
+                  <AttachmentButton
+                    busy={pickingAttachment === "video"}
+                    icon={<Video color="#ffffff" size={18} />}
+                    onPress={() => void pickAttachment("video")}
+                    styles={styles}
+                  />
+                  <AttachmentButton
+                    busy={pickingAttachment === "document"}
+                    icon={<FileText color="#ffffff" size={18} />}
+                    onPress={() => void pickAttachment("document")}
+                    styles={styles}
+                  />
+                </View>
+                <View style={styles.messageInputWrap}>
+                  <Plus color={styles.mutedIcon.color} size={21} strokeWidth={2.4} />
+                  <TextInput
+                    multiline
+                    onChangeText={setDraft}
+                    placeholder={
+                      conversation.kind === "direct"
+                        ? `Message ${conversation.subtitle}`
+                        : "Type a message here"
+                    }
+                    placeholderTextColor={styles.placeholder.color}
+                    style={styles.messageInput}
+                    value={draft}
+                  />
+                  <Smile color={styles.mutedIcon.color} size={20} />
+                </View>
+                <Pressable
+                  accessibilityRole="button"
+                  disabled={!canSend}
+                  onPress={handleSend}
+                  style={({ pressed }) => [
+                    styles.sendButton,
+                    pressed && canSend ? styles.pressed : null,
+                    !canSend ? styles.disabled : null,
+                  ]}
+                >
+                  {sending ? (
+                    <ActivityIndicator color="#ffffff" />
+                  ) : (
+                    <Send color="#ffffff" size={20} strokeWidth={2.5} />
+                  )}
+                </Pressable>
+              </View>
             </View>
           </View>
         </View>
@@ -529,54 +838,287 @@ export function ChatScreen({ session, onLogout }: Props) {
   );
 }
 
-type ConversationRowProps = {
+type NavItemProps = {
   active: boolean;
-  icon: "lobby" | "direct";
+  compact: boolean;
+  icon: ReactNode;
+  label: string;
   onPress: () => void;
-  subtitle: string;
-  title: string;
+  styles: ReturnType<typeof createStyles>;
 };
 
-function ConversationRow({
+function NavItem({
   active,
+  compact,
   icon,
+  label,
   onPress,
-  subtitle,
-  title,
-}: ConversationRowProps) {
+  styles,
+}: NavItemProps) {
   return (
     <Pressable
       accessibilityRole="button"
       onPress={onPress}
       style={({ pressed }) => [
-        styles.conversationRow,
-        active ? styles.conversationRowActive : null,
-        pressed ? styles.buttonPressed : null,
+        styles.navItem,
+        active ? styles.navItemActive : null,
+        pressed ? styles.pressed : null,
       ]}
     >
-      <View style={[styles.rowAvatar, active ? styles.rowAvatarActive : null]}>
-        {icon === "lobby" ? (
-          <Hash color={active ? "#f8faf7" : "#36584f"} size={18} />
-        ) : (
-          <AtSign color={active ? "#f8faf7" : "#36584f"} size={18} />
-        )}
+      <View style={[styles.navIconWrap, active ? styles.navIconWrapActive : null]}>
+        {icon}
       </View>
-      <View style={styles.rowText}>
-        <Text
-          numberOfLines={1}
-          style={[styles.rowTitle, active ? styles.rowTitleActive : null]}
-        >
-          {title}
+      {!compact ? <Text style={styles.navLabel}>{label}</Text> : null}
+    </Pressable>
+  );
+}
+
+type ConversationCardProps = {
+  active: boolean;
+  icon: ReactNode;
+  meta: string;
+  onPress: () => void;
+  preview: string;
+  styles: ReturnType<typeof createStyles>;
+  title: string;
+};
+
+function ConversationCard({
+  active,
+  icon,
+  meta,
+  onPress,
+  preview,
+  styles,
+  title,
+}: ConversationCardProps) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.conversationCard,
+        active ? styles.conversationCardActive : null,
+        pressed ? styles.pressed : null,
+      ]}
+    >
+      <View style={[styles.cardAvatar, active ? styles.cardAvatarActive : null]}>
+        {icon}
+      </View>
+      <View style={styles.cardText}>
+        <View style={styles.cardTopline}>
+          <Text numberOfLines={1} style={styles.cardTitle}>
+            {title}
+          </Text>
+          <Text style={styles.cardTime}>now</Text>
+        </View>
+        <Text numberOfLines={1} style={styles.cardMeta}>
+          {meta}
         </Text>
-        <Text
-          numberOfLines={1}
-          style={[styles.rowSubtitle, active ? styles.rowSubtitleActive : null]}
-        >
-          {subtitle}
+        <Text numberOfLines={2} style={styles.cardPreview}>
+          {preview}
         </Text>
       </View>
     </Pressable>
   );
+}
+
+type IconButtonProps = {
+  busy?: boolean;
+  icon: ReactNode;
+  label: string;
+  onPress: () => void;
+  styles: ReturnType<typeof createStyles>;
+};
+
+function IconButton({ busy, icon, label, onPress, styles }: IconButtonProps) {
+  return (
+    <Pressable
+      accessibilityLabel={label}
+      accessibilityRole="button"
+      disabled={busy}
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.iconButton,
+        pressed && !busy ? styles.pressed : null,
+        busy ? styles.disabled : null,
+      ]}
+    >
+      {busy ? <ActivityIndicator color="#2f80ed" size="small" /> : icon}
+    </Pressable>
+  );
+}
+
+type AttachmentButtonProps = {
+  busy: boolean;
+  icon: ReactNode;
+  onPress: () => void;
+  styles: ReturnType<typeof createStyles>;
+};
+
+function AttachmentButton({
+  busy,
+  icon,
+  onPress,
+  styles,
+}: AttachmentButtonProps) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      disabled={busy}
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.attachmentButton,
+        pressed && !busy ? styles.pressed : null,
+        busy ? styles.disabled : null,
+      ]}
+    >
+      {busy ? <ActivityIndicator color="#ffffff" size="small" /> : icon}
+    </Pressable>
+  );
+}
+
+function renderComposerAttachmentIcon(kind: AttachmentKind, color: string) {
+  const props = { color, size: 20, strokeWidth: 2.3 };
+
+  if (kind === "image") {
+    return <ImageIcon {...props} />;
+  }
+
+  if (kind === "video") {
+    return <Video {...props} />;
+  }
+
+  return <FileText {...props} />;
+}
+
+async function readAssetAsDataUrl(
+  asset: DocumentPicker.DocumentPickerAsset,
+  mimeType: string,
+) {
+  const record = asset as DocumentPicker.DocumentPickerAsset & {
+    file?: unknown;
+  };
+  let blob: unknown = record.file;
+
+  if (!blob) {
+    const response = await fetch(asset.uri);
+    blob = await response.blob();
+  }
+
+  const dataUrl = await readBlobAsDataUrl(blob);
+  const size =
+    asset.size ??
+    (typeof blob === "object" &&
+    blob !== null &&
+    "size" in blob &&
+    typeof blob.size === "number"
+      ? blob.size
+      : estimateDataUrlSize(dataUrl));
+
+  return {
+    dataUrl: normalizeDataUrl(dataUrl, mimeType),
+    size,
+  };
+}
+
+function readBlobAsDataUrl(blob: unknown) {
+  const Reader = (
+    globalThis as unknown as { FileReader?: FileReaderConstructor }
+  ).FileReader;
+
+  if (!Reader) {
+    throw new Error("File preview is not available on this platform.");
+  }
+
+  return new Promise<string>((resolve, reject) => {
+    const reader = new Reader();
+    reader.onerror = () => reject(reader.error ?? new Error("Unable to read file."));
+    reader.onloadend = () => {
+      if (typeof reader.result === "string") {
+        resolve(reader.result);
+        return;
+      }
+
+      reject(new Error("Unable to read file."));
+    };
+    reader.readAsDataURL(blob);
+  });
+}
+
+function normalizeDataUrl(dataUrl: string, mimeType: string) {
+  if (dataUrl.startsWith(`data:${mimeType};base64,`)) {
+    return dataUrl;
+  }
+
+  const commaIndex = dataUrl.indexOf(",");
+
+  if (dataUrl.startsWith("data:") && commaIndex > -1) {
+    return `data:${mimeType};base64,${dataUrl.slice(commaIndex + 1)}`;
+  }
+
+  return dataUrl;
+}
+
+function estimateDataUrlSize(dataUrl: string) {
+  const base64 = dataUrl.slice(dataUrl.indexOf(",") + 1);
+  return Math.max(1, Math.floor((base64.length * 3) / 4));
+}
+
+function inferMimeType(fileName: string) {
+  const extension = fileName.split(".").pop()?.toLowerCase();
+
+  switch (extension) {
+    case "jpg":
+    case "jpeg":
+      return "image/jpeg";
+    case "png":
+      return "image/png";
+    case "webp":
+      return "image/webp";
+    case "gif":
+      return "image/gif";
+    case "mp4":
+      return "video/mp4";
+    case "mov":
+      return "video/quicktime";
+    case "webm":
+      return "video/webm";
+    case "pdf":
+      return "application/pdf";
+    case "doc":
+      return "application/msword";
+    case "docx":
+      return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+    case "ppt":
+      return "application/vnd.ms-powerpoint";
+    case "pptx":
+      return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+    case "txt":
+      return "text/plain";
+    default:
+      return "application/octet-stream";
+  }
+}
+
+function labelForAttachment(kind: AttachmentKind) {
+  if (kind === "image") {
+    return "Photo";
+  }
+
+  if (kind === "video") {
+    return "Video";
+  }
+
+  return "Document";
+}
+
+function formatFileSize(size: number) {
+  if (size >= 1024 * 1024) {
+    return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+  }
+
+  return `${Math.max(1, Math.round(size / 1024))} KB`;
 }
 
 function connectionText(connection: ConnectionState) {
@@ -602,326 +1144,606 @@ function normalizeHandleInput(handle: string) {
   return handle.trim().replace(/^@+/, "").toLowerCase();
 }
 
-const styles = StyleSheet.create({
-  safe: {
-    backgroundColor: "#e6ede9",
-    flex: 1,
-  },
-  keyboard: {
-    flex: 1,
-  },
-  appShell: {
-    backgroundColor: "#f6faf7",
-    flex: 1,
-    flexDirection: "row",
-  },
-  appShellCompact: {
-    flexDirection: "column",
-  },
-  sidebar: {
-    backgroundColor: "#ffffff",
-    borderRightColor: "#d4e2dc",
-    borderRightWidth: 1,
-    maxWidth: 380,
-    minWidth: 310,
-    width: "32%",
-  },
-  sidebarCompact: {
-    borderBottomColor: "#d4e2dc",
-    borderBottomWidth: 1,
-    borderRightWidth: 0,
-    maxHeight: 300,
-    maxWidth: "100%",
-    minWidth: 0,
-    width: "100%",
-  },
-  sidebarHeader: {
-    alignItems: "center",
-    flexDirection: "row",
-    justifyContent: "space-between",
-    minHeight: 76,
-    paddingHorizontal: 18,
-    paddingVertical: 14,
-  },
-  brand: {
-    color: "#13231e",
-    fontSize: 24,
-    fontWeight: "800",
-    letterSpacing: 0,
-  },
-  accountHandle: {
-    color: "#6a7d76",
-    fontSize: 13,
-    marginTop: 2,
-  },
-  statusDot: {
-    alignItems: "center",
-    backgroundColor: "#f7e9e4",
-    borderRadius: 8,
-    height: 34,
-    justifyContent: "center",
-    width: 34,
-  },
-  statusDotOn: {
-    backgroundColor: "#e0f0e9",
-  },
-  handleSearch: {
-    alignItems: "center",
-    backgroundColor: "#f2f6f3",
-    borderColor: "#d5e2dc",
-    borderRadius: 8,
-    borderWidth: 1,
-    flexDirection: "row",
-    gap: 8,
-    marginHorizontal: 14,
-    marginBottom: 12,
-    minHeight: 46,
-    paddingLeft: 12,
-    paddingRight: 6,
-  },
-  handleInput: {
-    color: "#10201b",
-    flex: 1,
-    fontSize: 15,
-    minHeight: 42,
-    paddingVertical: 8,
-  },
-  openButton: {
-    alignItems: "center",
-    backgroundColor: "#143f37",
-    borderRadius: 8,
-    height: 34,
-    justifyContent: "center",
-    width: 40,
-  },
-  openDisabled: {
-    opacity: 0.45,
-  },
-  conversationList: {
-    gap: 4,
-    paddingBottom: 14,
-    paddingHorizontal: 10,
-  },
-  conversationRow: {
-    alignItems: "center",
-    borderRadius: 8,
-    flexDirection: "row",
-    gap: 12,
-    minHeight: 68,
-    paddingHorizontal: 10,
-  },
-  conversationRowActive: {
-    backgroundColor: "#e6f1ec",
-  },
-  rowAvatar: {
-    alignItems: "center",
-    backgroundColor: "#edf4f0",
-    borderRadius: 8,
-    height: 42,
-    justifyContent: "center",
-    width: 42,
-  },
-  rowAvatarActive: {
-    backgroundColor: "#143f37",
-  },
-  rowText: {
-    flex: 1,
-    minWidth: 0,
-  },
-  rowTitle: {
-    color: "#152720",
-    fontSize: 15,
-    fontWeight: "800",
-  },
-  rowTitleActive: {
-    color: "#10201b",
-  },
-  rowSubtitle: {
-    color: "#6e807a",
-    fontSize: 13,
-    marginTop: 3,
-  },
-  rowSubtitleActive: {
-    color: "#3d6258",
-  },
-  noContacts: {
-    padding: 14,
-  },
-  noContactsTitle: {
-    color: "#263a34",
-    fontSize: 14,
-    fontWeight: "800",
-  },
-  noContactsText: {
-    color: "#697b75",
-    fontSize: 13,
-    lineHeight: 19,
-    marginTop: 4,
-  },
-  sidebarFooter: {
-    alignItems: "center",
-    borderTopColor: "#dce8e2",
-    borderTopWidth: 1,
-    flexDirection: "row",
-    gap: 10,
-    minHeight: 68,
-    paddingHorizontal: 14,
-  },
-  avatar: {
-    alignItems: "center",
-    backgroundColor: "#143f37",
-    borderRadius: 8,
-    height: 40,
-    justifyContent: "center",
-    width: 40,
-  },
-  avatarText: {
-    color: "#f8faf7",
-    fontSize: 16,
-    fontWeight: "800",
-  },
-  footerUser: {
-    flex: 1,
-    minWidth: 0,
-  },
-  footerName: {
-    color: "#13231e",
-    fontSize: 14,
-    fontWeight: "800",
-  },
-  footerStatus: {
-    color: "#6d8079",
-    fontSize: 12,
-    marginTop: 2,
-  },
-  logoutButton: {
-    alignItems: "center",
-    backgroundColor: "#edf4f0",
-    borderRadius: 8,
-    height: 38,
-    justifyContent: "center",
-    width: 38,
-  },
-  chatPanel: {
-    backgroundColor: "#f2f6f3",
-    flex: 1,
-  },
-  chatHeader: {
-    alignItems: "center",
-    backgroundColor: "#ffffff",
-    borderBottomColor: "#dce8e2",
-    borderBottomWidth: 1,
-    flexDirection: "row",
-    justifyContent: "space-between",
-    minHeight: 76,
-    paddingHorizontal: 18,
-    paddingVertical: 12,
-  },
-  chatTitleBlock: {
-    flex: 1,
-    paddingRight: 12,
-  },
-  chatTitle: {
-    color: "#13231e",
-    fontSize: 20,
-    fontWeight: "800",
-  },
-  chatSubtitle: {
-    color: "#657871",
-    fontSize: 13,
-    marginTop: 2,
-  },
-  statusPill: {
-    alignItems: "center",
-    backgroundColor: "#f7e9e4",
-    borderRadius: 999,
-    flexDirection: "row",
-    gap: 5,
-    minHeight: 32,
-    paddingHorizontal: 10,
-  },
-  statusPillOn: {
-    backgroundColor: "#e0f0e9",
-  },
-  statusText: {
-    color: "#a04737",
-    fontSize: 12,
-    fontWeight: "800",
-  },
-  statusTextOn: {
-    color: "#1f6f58",
-  },
-  center: {
-    alignItems: "center",
-    flex: 1,
-    justifyContent: "center",
-  },
-  messages: {
-    padding: 18,
-  },
-  emptyContainer: {
-    flexGrow: 1,
-  },
-  empty: {
-    alignItems: "center",
-    flex: 1,
-    justifyContent: "center",
-    paddingHorizontal: 28,
-  },
-  emptyTitle: {
-    color: "#263a34",
-    fontSize: 18,
-    fontWeight: "800",
-    marginTop: 10,
-    textAlign: "center",
-  },
-  emptyText: {
-    color: "#64746f",
-    fontSize: 14,
-    lineHeight: 21,
-    marginTop: 6,
-    textAlign: "center",
-  },
-  error: {
-    color: "#a33f32",
-    fontSize: 13,
-    paddingHorizontal: 18,
-    paddingVertical: 8,
-  },
-  composer: {
-    alignItems: "flex-end",
-    backgroundColor: "#ffffff",
-    borderTopColor: "#dce8e2",
-    borderTopWidth: 1,
-    flexDirection: "row",
-    gap: 10,
-    padding: 12,
-  },
-  messageInput: {
-    backgroundColor: "#f2f6f3",
-    borderColor: "#d1ded8",
-    borderRadius: 8,
-    borderWidth: 1,
-    color: "#10201b",
-    flex: 1,
-    fontSize: 16,
-    maxHeight: 112,
-    minHeight: 48,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-  },
-  sendButton: {
-    alignItems: "center",
-    backgroundColor: "#143f37",
-    borderRadius: 8,
-    height: 48,
-    justifyContent: "center",
-    width: 48,
-  },
-  sendDisabled: {
-    opacity: 0.45,
-  },
-  buttonPressed: {
-    transform: [{ scale: 0.97 }],
-  },
-});
+function createStyles(theme: AppTheme, compact: boolean) {
+  const dark = theme === "dark";
+  const page = dark ? "#0f172a" : "#e9eefc";
+  const rail = dark ? "#111827" : "#ffffff";
+  const panel = dark ? "#172033" : "#f8fbff";
+  const card = dark ? "#1f2937" : "#ffffff";
+  const cardAlt = dark ? "#111827" : "#f1f5f9";
+  const border = dark ? "#334155" : "#e2e8f0";
+  const text = dark ? "#f8fafc" : "#111827";
+  const muted = dark ? "#aab4c8" : "#64748b";
+  const faint = dark ? "#6b7280" : "#94a3b8";
+  const blue = "#2f80ed";
+
+  return StyleSheet.create({
+    safe: {
+      backgroundColor: page,
+      flex: 1,
+    },
+    keyboard: {
+      flex: 1,
+    },
+    appShell: {
+      backgroundColor: panel,
+      borderColor: border,
+      borderRadius: compact ? 0 : 8,
+      borderWidth: compact ? 0 : 1,
+      flex: 1,
+      flexDirection: compact ? "column" : "row",
+      margin: compact ? 0 : 28,
+      overflow: "hidden",
+      boxShadow: dark
+        ? "0 28px 40px rgba(15, 23, 42, 0.32)"
+        : "0 28px 40px rgba(15, 23, 42, 0.16)",
+    },
+    navRail: {
+      backgroundColor: rail,
+      borderBottomColor: compact ? border : "transparent",
+      borderBottomWidth: compact ? 1 : 0,
+      borderRightColor: compact ? "transparent" : border,
+      borderRightWidth: compact ? 0 : 1,
+      flexDirection: compact ? "row" : "column",
+      gap: compact ? 6 : 18,
+      minHeight: compact ? 84 : undefined,
+      paddingHorizontal: compact ? 10 : 22,
+      paddingVertical: compact ? 10 : 28,
+      width: compact ? "100%" : 250,
+    },
+    profileBlock: {
+      alignItems: "center",
+      flexDirection: compact ? "row" : "column",
+      gap: 8,
+      minWidth: compact ? 58 : undefined,
+    },
+    profileAvatar: {
+      alignItems: "center",
+      backgroundColor: dark ? "#1e3a8a" : "#dbeafe",
+      borderColor: dark ? "#60a5fa" : "#bfdbfe",
+      borderRadius: 8,
+      borderWidth: 1,
+      height: compact ? 42 : 72,
+      justifyContent: "center",
+      width: compact ? 42 : 72,
+    },
+    profileAvatarText: {
+      color: dark ? "#dbeafe" : "#1d4ed8",
+      fontSize: compact ? 18 : 30,
+      fontWeight: "900",
+    },
+    profileName: {
+      color: text,
+      fontSize: 15,
+      fontWeight: "800",
+      marginTop: 4,
+      maxWidth: 180,
+    },
+    profileHandle: {
+      color: muted,
+      fontSize: 12,
+      marginTop: 2,
+      maxWidth: 180,
+    },
+    navItems: {
+      flex: 1,
+      flexDirection: compact ? "row" : "column",
+      gap: compact ? 5 : 6,
+      justifyContent: compact ? "center" : "flex-start",
+    },
+    navItem: {
+      alignItems: "center",
+      borderRadius: 8,
+      flexDirection: compact ? "column" : "row",
+      gap: 11,
+      minHeight: compact ? 50 : 44,
+      paddingHorizontal: compact ? 8 : 10,
+    },
+    navItemActive: {
+      backgroundColor: dark ? "#172554" : "#eff6ff",
+    },
+    navIconWrap: {
+      alignItems: "center",
+      borderRadius: 7,
+      height: 30,
+      justifyContent: "center",
+      width: 30,
+    },
+    navIconWrapActive: {
+      backgroundColor: dark ? "#1d4ed8" : "#dbeafe",
+    },
+    navIcon: {
+      color: dark ? "#cbd5e1" : "#475569",
+    },
+    navLabel: {
+      color: dark ? "#cbd5e1" : "#475569",
+      fontSize: 12,
+      fontWeight: "900",
+      textTransform: "uppercase",
+    },
+    logoutButton: {
+      alignItems: "center",
+      borderRadius: 8,
+      flexDirection: compact ? "column" : "row",
+      gap: 10,
+      minHeight: compact ? 50 : 44,
+      paddingHorizontal: 10,
+    },
+    logoutText: {
+      color: dark ? "#cbd5e1" : "#475569",
+      fontSize: 12,
+      fontWeight: "900",
+      textTransform: "uppercase",
+    },
+    inboxPanel: {
+      backgroundColor: panel,
+      borderBottomColor: compact ? border : "transparent",
+      borderBottomWidth: compact ? 1 : 0,
+      borderRightColor: compact ? "transparent" : border,
+      borderRightWidth: compact ? 0 : 1,
+      maxHeight: compact ? 360 : undefined,
+      padding: 22,
+      width: compact ? "100%" : 410,
+    },
+    inboxHeader: {
+      alignItems: compact ? "stretch" : "center",
+      flexDirection: compact ? "column" : "row",
+      gap: 14,
+      justifyContent: "space-between",
+      marginBottom: 18,
+    },
+    inboxTitle: {
+      color: text,
+      fontSize: 30,
+      fontWeight: "900",
+      letterSpacing: 0,
+    },
+    inboxSubtitle: {
+      color: muted,
+      fontSize: 13,
+      fontWeight: "700",
+      marginTop: 5,
+    },
+    newChatButton: {
+      alignItems: "center",
+      backgroundColor: blue,
+      borderRadius: 7,
+      flexDirection: "row",
+      gap: 8,
+      justifyContent: "center",
+      minHeight: 44,
+      paddingHorizontal: 14,
+      boxShadow: "0 12px 18px rgba(47, 128, 237, 0.26)",
+    },
+    newChatText: {
+      color: "#ffffff",
+      fontSize: 13,
+      fontWeight: "900",
+    },
+    searchRow: {
+      alignItems: "center",
+      backgroundColor: card,
+      borderColor: border,
+      borderRadius: 7,
+      borderWidth: 1,
+      flexDirection: "row",
+      gap: 9,
+      minHeight: 50,
+      paddingLeft: 13,
+      paddingRight: 7,
+    },
+    searchIcon: {
+      color: muted,
+    },
+    placeholder: {
+      color: faint,
+    },
+    handleInput: {
+      color: text,
+      flex: 1,
+      fontSize: 14,
+      minHeight: 46,
+      paddingVertical: 8,
+    },
+    openButton: {
+      alignItems: "center",
+      backgroundColor: blue,
+      borderRadius: 7,
+      height: 36,
+      justifyContent: "center",
+      width: 40,
+    },
+    settingsPanel: {
+      backgroundColor: card,
+      borderColor: border,
+      borderRadius: 8,
+      borderWidth: 1,
+      gap: 12,
+      marginTop: 14,
+      padding: 14,
+    },
+    settingsTitle: {
+      color: text,
+      fontSize: 16,
+      fontWeight: "900",
+    },
+    themeRow: {
+      alignItems: "center",
+      backgroundColor: cardAlt,
+      borderRadius: 8,
+      flexDirection: "row",
+      gap: 12,
+      minHeight: 62,
+      padding: 10,
+    },
+    themeIcon: {
+      alignItems: "center",
+      backgroundColor: dark ? "#172554" : "#fffbeb",
+      borderRadius: 8,
+      height: 38,
+      justifyContent: "center",
+      width: 38,
+    },
+    themeTextBlock: {
+      flex: 1,
+    },
+    themeTitle: {
+      color: text,
+      fontSize: 14,
+      fontWeight: "900",
+    },
+    themeSubtitle: {
+      color: muted,
+      fontSize: 12,
+      marginTop: 2,
+    },
+    themeSwitch: {
+      backgroundColor: dark ? "#334155" : "#cbd5e1",
+      borderRadius: 999,
+      height: 26,
+      justifyContent: "center",
+      paddingHorizontal: 3,
+      width: 48,
+    },
+    themeSwitchOn: {
+      backgroundColor: blue,
+    },
+    themeKnob: {
+      backgroundColor: "#ffffff",
+      borderRadius: 999,
+      height: 20,
+      width: 20,
+    },
+    themeKnobOn: {
+      transform: [{ translateX: 22 }],
+    },
+    conversationList: {
+      gap: 14,
+      paddingTop: 16,
+      paddingBottom: 22,
+    },
+    conversationCard: {
+      backgroundColor: card,
+      borderColor: border,
+      borderRadius: 8,
+      borderWidth: 1,
+      flexDirection: "row",
+      gap: 13,
+      minHeight: 112,
+      padding: 14,
+      boxShadow: dark
+        ? "0 10px 18px rgba(15, 23, 42, 0.2)"
+        : "0 10px 18px rgba(15, 23, 42, 0.07)",
+    },
+    conversationCardActive: {
+      borderColor: dark ? "#60a5fa" : "#bfdbfe",
+      boxShadow: dark
+        ? "0 10px 18px rgba(47, 128, 237, 0.25)"
+        : "0 10px 18px rgba(47, 128, 237, 0.13)",
+    },
+    cardAvatar: {
+      alignItems: "center",
+      backgroundColor: dark ? "#334155" : "#94a3b8",
+      borderRadius: 8,
+      height: 48,
+      justifyContent: "center",
+      width: 48,
+    },
+    cardAvatarActive: {
+      backgroundColor: blue,
+    },
+    cardAvatarText: {
+      color: "#ffffff",
+      fontSize: 18,
+      fontWeight: "900",
+    },
+    cardText: {
+      flex: 1,
+      minWidth: 0,
+    },
+    cardTopline: {
+      alignItems: "center",
+      flexDirection: "row",
+      gap: 8,
+      justifyContent: "space-between",
+    },
+    cardTitle: {
+      color: text,
+      flex: 1,
+      fontSize: 15,
+      fontWeight: "900",
+    },
+    cardTime: {
+      color: faint,
+      fontSize: 11,
+      fontWeight: "700",
+    },
+    cardMeta: {
+      color: blue,
+      fontSize: 12,
+      fontWeight: "800",
+      marginTop: 3,
+    },
+    cardPreview: {
+      color: muted,
+      fontSize: 13,
+      lineHeight: 19,
+      marginTop: 12,
+    },
+    noContacts: {
+      backgroundColor: card,
+      borderColor: border,
+      borderRadius: 8,
+      borderWidth: 1,
+      padding: 16,
+    },
+    noContactsTitle: {
+      color: text,
+      fontSize: 15,
+      fontWeight: "900",
+    },
+    noContactsText: {
+      color: muted,
+      fontSize: 13,
+      lineHeight: 19,
+      marginTop: 5,
+    },
+    chatPanel: {
+      backgroundColor: dark ? "#0f172a" : "#ffffff",
+      flex: 1,
+      minHeight: 0,
+    },
+    chatHeader: {
+      alignItems: "center",
+      borderBottomColor: border,
+      borderBottomWidth: 1,
+      flexDirection: "row",
+      gap: 14,
+      justifyContent: "space-between",
+      minHeight: 86,
+      paddingHorizontal: compact ? 16 : 28,
+      paddingVertical: 16,
+    },
+    chatIdentity: {
+      alignItems: "center",
+      flex: 1,
+      flexDirection: "row",
+      gap: 13,
+      minWidth: 0,
+    },
+    chatAvatar: {
+      alignItems: "center",
+      backgroundColor: dark ? "#1e3a8a" : "#dbeafe",
+      borderRadius: 8,
+      height: 46,
+      justifyContent: "center",
+      width: 46,
+    },
+    chatAvatarText: {
+      color: dark ? "#dbeafe" : "#1d4ed8",
+      fontSize: 18,
+      fontWeight: "900",
+    },
+    chatTitleBlock: {
+      flex: 1,
+      minWidth: 0,
+    },
+    chatTitle: {
+      color: text,
+      fontSize: 17,
+      fontWeight: "900",
+    },
+    chatSubtitle: {
+      color: blue,
+      fontSize: 12,
+      fontWeight: "800",
+      marginTop: 3,
+    },
+    chatActions: {
+      alignItems: "center",
+      flexDirection: "row",
+      gap: 8,
+    },
+    statusPill: {
+      alignItems: "center",
+      backgroundColor: dark ? "#2f1f1f" : "#fef2f2",
+      borderRadius: 999,
+      flexDirection: "row",
+      gap: 6,
+      minHeight: 34,
+      paddingHorizontal: 10,
+    },
+    statusPillOn: {
+      backgroundColor: dark ? "#12341f" : "#dcfce7",
+    },
+    statusText: {
+      color: dark ? "#fecaca" : "#b91c1c",
+      fontSize: 12,
+      fontWeight: "900",
+    },
+    statusTextOn: {
+      color: dark ? "#bbf7d0" : "#166534",
+    },
+    iconButton: {
+      alignItems: "center",
+      backgroundColor: card,
+      borderColor: border,
+      borderRadius: 8,
+      borderWidth: 1,
+      height: 42,
+      justifyContent: "center",
+      width: 42,
+    },
+    actionIcon: {
+      color: muted,
+    },
+    center: {
+      alignItems: "center",
+      flex: 1,
+      justifyContent: "center",
+    },
+    messages: {
+      paddingBottom: 18,
+      paddingHorizontal: compact ? 16 : 30,
+      paddingTop: 22,
+    },
+    emptyContainer: {
+      flexGrow: 1,
+      justifyContent: "center",
+    },
+    empty: {
+      alignItems: "center",
+      alignSelf: "center",
+      maxWidth: 360,
+    },
+    emptyIcon: {
+      color: muted,
+    },
+    emptyTitle: {
+      color: text,
+      fontSize: 18,
+      fontWeight: "900",
+      marginTop: 12,
+    },
+    emptyText: {
+      color: muted,
+      fontSize: 14,
+      lineHeight: 20,
+      marginTop: 6,
+      textAlign: "center",
+    },
+    errorWrap: {
+      paddingHorizontal: compact ? 16 : 30,
+      paddingTop: 8,
+    },
+    error: {
+      color: dark ? "#fca5a5" : "#b91c1c",
+      fontSize: 13,
+      fontWeight: "700",
+    },
+    composerWrap: {
+      borderTopColor: border,
+      borderTopWidth: 1,
+      paddingHorizontal: compact ? 12 : 28,
+      paddingVertical: 14,
+    },
+    attachmentPreview: {
+      alignItems: "center",
+      backgroundColor: card,
+      borderColor: border,
+      borderRadius: 8,
+      borderWidth: 1,
+      flexDirection: "row",
+      gap: 11,
+      marginBottom: 10,
+      padding: 10,
+    },
+    attachmentPreviewIcon: {
+      alignItems: "center",
+      backgroundColor: dark ? "#172554" : "#dbeafe",
+      borderRadius: 8,
+      height: 38,
+      justifyContent: "center",
+      width: 38,
+    },
+    attachmentPreviewIconColor: {
+      color: dark ? "#bfdbfe" : blue,
+    },
+    attachmentPreviewText: {
+      flex: 1,
+      minWidth: 0,
+    },
+    attachmentName: {
+      color: text,
+      fontSize: 13,
+      fontWeight: "900",
+    },
+    attachmentMeta: {
+      color: muted,
+      fontSize: 12,
+      marginTop: 2,
+    },
+    clearAttachment: {
+      alignItems: "center",
+      borderRadius: 7,
+      height: 32,
+      justifyContent: "center",
+      width: 32,
+    },
+    composer: {
+      alignItems: "flex-end",
+      flexDirection: "row",
+      gap: 10,
+    },
+    attachmentRail: {
+      gap: 8,
+    },
+    attachmentButton: {
+      alignItems: "center",
+      backgroundColor: blue,
+      borderRadius: 999,
+      height: 38,
+      justifyContent: "center",
+      width: 38,
+    },
+    messageInputWrap: {
+      alignItems: "center",
+      backgroundColor: card,
+      borderColor: border,
+      borderRadius: 8,
+      borderWidth: 1,
+      flex: 1,
+      flexDirection: "row",
+      gap: 10,
+      minHeight: 52,
+      paddingHorizontal: 12,
+      paddingVertical: 6,
+    },
+    messageInput: {
+      color: text,
+      flex: 1,
+      fontSize: 15,
+      lineHeight: 20,
+      maxHeight: 120,
+      minHeight: 38,
+      paddingVertical: 8,
+    },
+    mutedIcon: {
+      color: muted,
+    },
+    sendButton: {
+      alignItems: "center",
+      backgroundColor: blue,
+      borderRadius: 999,
+      height: 48,
+      justifyContent: "center",
+      width: 48,
+    },
+    pressed: {
+      transform: [{ scale: 0.98 }],
+    },
+    disabled: {
+      opacity: 0.45,
+    },
+  });
+}

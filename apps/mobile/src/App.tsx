@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { ActivityIndicator, SafeAreaView, StyleSheet } from "react-native";
 import {
   fetchCurrentUser,
@@ -7,20 +7,78 @@ import {
 } from "./api";
 import { ChatScreen } from "./components/ChatScreen";
 import { LoginScreen } from "./components/LoginScreen";
-import { clearStoredSession, getStoredSession, saveSession } from "./storage";
-import type { RegisterInput, Session } from "./types";
+import {
+  clearStoredSession,
+  getStoredSession,
+  getStoredTheme,
+  saveSession,
+  saveTheme,
+} from "./storage";
+import type { AppTheme, RegisterInput, Session } from "./types";
+
+type KeyboardShortcutEvent = {
+  ctrlKey?: boolean;
+  key?: string;
+  metaKey?: boolean;
+  preventDefault?: () => void;
+};
+
+type KeyboardTarget = {
+  addEventListener?: (
+    type: "keydown",
+    listener: (event: KeyboardShortcutEvent) => void,
+  ) => void;
+  removeEventListener?: (
+    type: "keydown",
+    listener: (event: KeyboardShortcutEvent) => void,
+  ) => void;
+};
 
 export default function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [booting, setBooting] = useState(true);
   const [authError, setAuthError] = useState<string | null>(null);
   const [authing, setAuthing] = useState(false);
+  const [theme, setTheme] = useState<AppTheme>("light");
+
+  const toggleTheme = useCallback(() => {
+    setTheme((current) => {
+      const nextTheme = current === "light" ? "dark" : "light";
+      void saveTheme(nextTheme);
+      return nextTheme;
+    });
+  }, []);
+
+  useEffect(() => {
+    const keyboardTarget = globalThis as unknown as KeyboardTarget;
+
+    if (!keyboardTarget.addEventListener) {
+      return undefined;
+    }
+
+    const handleKeyDown = (event: KeyboardShortcutEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key?.toLowerCase() === "d") {
+        event.preventDefault?.();
+        toggleTheme();
+      }
+    };
+
+    keyboardTarget.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      keyboardTarget.removeEventListener?.("keydown", handleKeyDown);
+    };
+  }, [toggleTheme]);
 
   useEffect(() => {
     let active = true;
 
-    getStoredSession()
-      .then(async (stored) => {
+    Promise.all([getStoredSession(), getStoredTheme()])
+      .then(async ([stored, storedTheme]) => {
+        if (active) {
+          setTheme(storedTheme);
+        }
+
         if (!stored) {
           return;
         }
@@ -87,14 +145,23 @@ export default function App() {
 
   if (booting) {
     return (
-      <SafeAreaView style={styles.boot}>
-        <ActivityIndicator color="#143f37" />
+      <SafeAreaView
+        style={[styles.boot, theme === "dark" ? styles.bootDark : null]}
+      >
+        <ActivityIndicator color={theme === "dark" ? "#7dd3fc" : "#2563eb"} />
       </SafeAreaView>
     );
   }
 
   if (session) {
-    return <ChatScreen session={session} onLogout={handleLogout} />;
+    return (
+      <ChatScreen
+        session={session}
+        onLogout={handleLogout}
+        onToggleTheme={toggleTheme}
+        theme={theme}
+      />
+    );
   }
 
   return (
@@ -103,6 +170,8 @@ export default function App() {
       loading={authing}
       onLogin={handleLogin}
       onRegister={handleRegister}
+      onToggleTheme={toggleTheme}
+      theme={theme}
     />
   );
 }
@@ -110,8 +179,11 @@ export default function App() {
 const styles = StyleSheet.create({
   boot: {
     alignItems: "center",
-    backgroundColor: "#f7fbf7",
+    backgroundColor: "#eef4ff",
     flex: 1,
     justifyContent: "center",
+  },
+  bootDark: {
+    backgroundColor: "#111827",
   },
 });

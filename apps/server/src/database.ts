@@ -9,6 +9,7 @@ import {
   parseDirectRoomId,
 } from "./rooms.js";
 import type {
+  ChatAttachment,
   ChatMessage,
   DirectConversation,
   PublicUser,
@@ -39,8 +40,9 @@ type MessageRow = {
   sender_name: string;
   text: string;
   timestamp: string;
-  type: "text";
+  type: "text" | "attachment";
   room_id: string;
+  attachment_json: string | null;
 };
 
 const legacyDemoUserIds = ["user-alex", "user-mira", "user-sam"];
@@ -205,9 +207,9 @@ export class TalkNestDatabase {
   listMessages(roomId: string, limit: number): ChatMessage[] {
     const rows = this.db
       .prepare(
-        `SELECT id, sender_id, sender_name, text, timestamp, type, room_id
+        `SELECT id, sender_id, sender_name, text, timestamp, type, room_id, attachment_json
          FROM (
-           SELECT id, sender_id, sender_name, text, timestamp, type, room_id
+           SELECT id, sender_id, sender_name, text, timestamp, type, room_id, attachment_json
            FROM messages
            WHERE room_id = ?
            ORDER BY timestamp DESC
@@ -224,6 +226,7 @@ export class TalkNestDatabase {
     sender: PublicUser;
     text: string;
     roomId: string;
+    attachment?: ChatAttachment;
   }): ChatMessage {
     const message: ChatMessage = {
       id: randomUUID(),
@@ -231,14 +234,16 @@ export class TalkNestDatabase {
       senderName: input.sender.displayName,
       text: input.text,
       timestamp: new Date().toISOString(),
-      type: "text",
+      type: input.attachment ? "attachment" : "text",
       roomId: input.roomId,
+      attachment: input.attachment,
     };
 
     this.db
       .prepare(
-        `INSERT INTO messages (id, sender_id, sender_name, text, timestamp, type, room_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO messages
+         (id, sender_id, sender_name, text, timestamp, type, room_id, attachment_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         message.id,
@@ -248,6 +253,7 @@ export class TalkNestDatabase {
         message.timestamp,
         message.type,
         message.roomId,
+        message.attachment ? JSON.stringify(message.attachment) : null,
       );
 
     return message;
@@ -277,6 +283,7 @@ export class TalkNestDatabase {
         timestamp TEXT NOT NULL,
         type TEXT NOT NULL DEFAULT 'text',
         room_id TEXT NOT NULL DEFAULT 'lobby',
+        attachment_json TEXT,
         FOREIGN KEY (sender_id) REFERENCES users(id)
       );
 
@@ -284,6 +291,7 @@ export class TalkNestDatabase {
       ON messages (room_id, timestamp);
     `);
     this.ensureHandleColumn();
+    this.ensureMessageAttachmentColumn();
     this.db.exec(`
       CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_unique
       ON users (lower(username));
@@ -310,6 +318,20 @@ export class TalkNestDatabase {
     this.db.exec(
       "UPDATE users SET handle = lower(username) WHERE handle IS NULL",
     );
+  }
+
+  private ensureMessageAttachmentColumn() {
+    const columns = this.db
+      .prepare("PRAGMA table_info(messages)")
+      .all() as Array<{
+      name: string;
+    }>;
+
+    if (columns.some((column) => column.name === "attachment_json")) {
+      return;
+    }
+
+    this.db.exec("ALTER TABLE messages ADD COLUMN attachment_json TEXT");
   }
 
   private removeLegacyDemoData() {
@@ -366,5 +388,8 @@ function mapMessageRow(row: MessageRow): ChatMessage {
     timestamp: row.timestamp,
     type: row.type,
     roomId: row.room_id,
+    attachment: row.attachment_json
+      ? (JSON.parse(row.attachment_json) as ChatAttachment)
+      : undefined,
   };
 }

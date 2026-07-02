@@ -22,8 +22,19 @@ export type ChatMessage = {
   senderName: string;
   text: string;
   timestamp: string;
-  type: "text";
+  type: "text" | "attachment";
   roomId: string;
+  attachment?: ChatAttachment;
+};
+
+export type AttachmentKind = "image" | "video" | "document";
+
+export type ChatAttachment = {
+  kind: AttachmentKind;
+  fileName: string;
+  mimeType: string;
+  size: number;
+  dataUrl: string;
 };
 
 export type AuthTokenPayload = {

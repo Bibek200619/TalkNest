@@ -5,7 +5,7 @@ import type { AppConfig } from "./config.js";
 import { getCorsOrigin } from "./config.js";
 import type { TalkNestDatabase } from "./database.js";
 import { LOBBY_ROOM_ID } from "./rooms.js";
-import { messageInputSchema } from "./schemas.js";
+import { messageInputSchema, roomJoinSchema } from "./schemas.js";
 
 type SendAck =
   | { ok: true; message: ReturnType<TalkNestDatabase["createMessage"]> }
@@ -59,9 +59,7 @@ export function createSocketServer(deps: {
     socket.on(
       "room:join",
       (payload: unknown, ack?: (response: RoomJoinAck) => void) => {
-        const parsed = messageInputSchema
-          .pick({ roomId: true })
-          .safeParse(payload ?? { roomId });
+        const parsed = roomJoinSchema.safeParse(payload ?? { roomId });
 
         if (!parsed.success) {
           ack?.({ ok: false, error: "Invalid room" });
@@ -90,7 +88,10 @@ export function createSocketServer(deps: {
         const parsed = messageInputSchema.safeParse(payload);
 
         if (!parsed.success) {
-          ack?.({ ok: false, error: "Message cannot be empty" });
+          ack?.({
+            ok: false,
+            error: parsed.error.issues[0]?.message ?? "Message cannot be empty",
+          });
           return;
         }
 
@@ -117,6 +118,7 @@ export function createSocketServer(deps: {
             sender: socket.data.user,
             text: parsed.data.text,
             roomId: parsed.data.roomId,
+            attachment: parsed.data.attachment,
           });
 
           io.to(parsed.data.roomId).emit("message:new", message);
