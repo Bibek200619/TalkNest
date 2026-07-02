@@ -164,6 +164,7 @@ export function ChatScreen({
   const [draft, setDraft] = useState("");
   const [selectedAttachment, setSelectedAttachment] =
     useState<ChatAttachment | null>(null);
+  const [attachmentMenuOpen, setAttachmentMenuOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [joining, setJoining] = useState(false);
   const [sending, setSending] = useState(false);
@@ -406,6 +407,7 @@ export function ChatScreen({
     setSending(true);
     setDraft("");
     setSelectedAttachment(null);
+    setAttachmentMenuOpen(false);
     const payload = {
       roomId: conversation.roomId,
       text,
@@ -472,6 +474,7 @@ export function ChatScreen({
         size: file.size,
         dataUrl: normalizeDataUrl(file.dataUrl, mimeType),
       });
+      setAttachmentMenuOpen(false);
     } catch (pickError) {
       setError(
         pickError instanceof Error
@@ -858,10 +861,9 @@ export function ChatScreen({
                   </Text>
                 </View>
                 <IconButton
-                  busy={pickingAttachment === "document"}
                   icon={<Paperclip color={styles.actionIcon.color} size={19} />}
-                  label="Attach file"
-                  onPress={() => void pickAttachment("document")}
+                  label="Toggle attachments"
+                  onPress={() => setAttachmentMenuOpen((current) => !current)}
                   styles={styles}
                 />
                 <IconButton
@@ -946,28 +948,51 @@ export function ChatScreen({
               ) : null}
 
               <View style={styles.composer}>
-                <View style={styles.attachmentRail}>
-                  <AttachmentButton
-                    busy={pickingAttachment === "image"}
-                    icon={<ImageIcon color="#ffffff" size={18} />}
-                    onPress={() => void pickAttachment("image")}
-                    styles={styles}
-                  />
-                  <AttachmentButton
-                    busy={pickingAttachment === "video"}
-                    icon={<Video color="#ffffff" size={18} />}
-                    onPress={() => void pickAttachment("video")}
-                    styles={styles}
-                  />
-                  <AttachmentButton
-                    busy={pickingAttachment === "document"}
-                    icon={<FileText color="#ffffff" size={18} />}
-                    onPress={() => void pickAttachment("document")}
-                    styles={styles}
-                  />
-                </View>
+                {attachmentMenuOpen ? (
+                  <View style={styles.attachmentRail}>
+                    <AttachmentButton
+                      busy={pickingAttachment === "image"}
+                      icon={<ImageIcon color="#ffffff" size={18} />}
+                      onPress={() => void pickAttachment("image")}
+                      styles={styles}
+                    />
+                    <AttachmentButton
+                      busy={pickingAttachment === "video"}
+                      icon={<Video color="#ffffff" size={18} />}
+                      onPress={() => void pickAttachment("video")}
+                      styles={styles}
+                    />
+                    <AttachmentButton
+                      busy={pickingAttachment === "document"}
+                      icon={<FileText color="#ffffff" size={18} />}
+                      onPress={() => void pickAttachment("document")}
+                      styles={styles}
+                    />
+                  </View>
+                ) : null}
                 <View style={styles.messageInputWrap}>
-                  <Plus color={styles.mutedIcon.color} size={21} strokeWidth={2.4} />
+                  <Pressable
+                    accessibilityLabel="Toggle attachments"
+                    accessibilityRole="button"
+                    onPress={() =>
+                      setAttachmentMenuOpen((current) => !current)
+                    }
+                    style={({ pressed }) => [
+                      styles.composerAttachButton,
+                      attachmentMenuOpen ? styles.composerAttachButtonActive : null,
+                      pressed ? styles.pressed : null,
+                    ]}
+                  >
+                    {attachmentMenuOpen ? (
+                      <X color="#ffffff" size={18} strokeWidth={2.4} />
+                    ) : (
+                      <Plus
+                        color={styles.mutedIcon.color}
+                        size={21}
+                        strokeWidth={2.4}
+                      />
+                    )}
+                  </Pressable>
                   <TextInput
                     multiline
                     onChangeText={setDraft}
@@ -2414,6 +2439,16 @@ function createStyles(
       minHeight: 52,
       paddingHorizontal: 12,
       paddingVertical: 6,
+    },
+    composerAttachButton: {
+      alignItems: "center",
+      borderRadius: 999,
+      height: 34,
+      justifyContent: "center",
+      width: 34,
+    },
+    composerAttachButtonActive: {
+      backgroundColor: blue,
     },
     messageInput: {
       color: text,
