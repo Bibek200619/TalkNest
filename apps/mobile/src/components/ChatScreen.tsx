@@ -1715,16 +1715,13 @@ function createStyles(
     },
     appShell: {
       backgroundColor: panel,
-      borderColor: border,
-      borderRadius: compact ? 0 : 8,
-      borderWidth: compact ? 0 : 1,
+      borderRadius: 0,
+      borderWidth: 0,
       flex: 1,
       flexDirection: compact ? "column" : "row",
-      margin: compact ? 0 : 28,
+      margin: 0,
       overflow: "hidden",
-      boxShadow: dark
-        ? "0 28px 40px rgba(15, 23, 42, 0.32)"
-        : "0 28px 40px rgba(15, 23, 42, 0.16)",
+      boxShadow: "none",
     },
     navRail: {
       backgroundColor: rail,
