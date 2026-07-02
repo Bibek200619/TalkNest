@@ -1,23 +1,21 @@
-Summary: Add user handles and handle-based personal chat to TalkNest. The backend remains the source of truth for public handles, direct conversation room IDs, message authorization, and message timestamps; the mobile app adds a handle picker so users can open private threads.
+Summary: Convert TalkNest into a non-demo app by adding real registration, redesigning the chat UI around a left conversation sidebar, and linking the landing page directly into the app.
 
-Context: Current users have unique usernames but no explicit public handle field. REST exposes login, current user, and shared lobby history; Socket.io accepts any room ID and sends all messages through the shared `roomId` contract. The mobile app loads one fixed lobby room from `ROOM_ID`, connects one socket, and renders all incoming messages into the current list.
+Context: The backend currently seeds `alex`, `mira`, and `sam` on startup, and tests rely on those demo accounts. The mobile app has a top header plus horizontal user chips, which does not match the requested WhatsApp-like sidebar layout. The landing page still describes demo credentials and only links to page sections instead of the main app.
 
-System Impact: Public users gain a unique `handle` shown as `@handle`. Direct messages use deterministic room IDs derived by the server from the two participant user IDs. REST history and socket joins/sends must authorize direct rooms so only the two participants can load, join, or send to that personal thread. The mobile app will track the active conversation and only render socket messages for that conversation.
+System Impact: User records become user-created data rather than boot-time demo data. Auth gains a registration path that creates a unique username, handle, email, display name, and password hash, then returns the same session shape as login. The chat UI derives its sidebar contacts from the authenticated user directory and the active room selected by the user. The landing page has a configurable app URL so local and hosted environments can point users to the app runtime.
 
-Approach: Keep the existing `roomId` message contract and extend it instead of creating a separate direct-message transport. Add handle lookup and direct-room helpers on the backend, expose authenticated user listing plus handle resolution, and add authorization before REST history, `room:join`, and `message:send`. Update the mobile chat screen with a compact handle selector, lobby/direct conversation state, and per-room message loading.
+Approach: Keep the existing JWT/session and room contracts, remove demo seeding, and add `POST /api/auth/register`. Update tests to create users explicitly before login, direct messaging, and socket assertions. Redesign the Expo chat screen with a desktop/tablet left sidebar and responsive mobile behavior. Update the landing page copy and CTAs to open the app instead of advertising seeded users.
 
 Changes:
 
-- `apps/server/src/types.ts` - add `handle` to public/auth user types and define direct conversation response shape.
-- `apps/server/src/rooms.ts` - add pure helpers for handle normalization and deterministic direct room IDs.
-- `apps/server/src/database.ts` - add/migrate `users.handle`, seed demo handles, expose handle lookup, list public users, and direct-room access checks.
-- `apps/server/src/schemas.ts` - add handle resolution schema and keep room/message validation bounded.
-- `apps/server/src/http.ts` - add `GET /api/users`, `POST /api/direct-conversations/resolve`, and enforce message history authorization.
-- `apps/server/src/socket.ts` - authorize direct `room:join` and `message:send` requests before joining or broadcasting.
-- `apps/server/tests/server.test.ts` - cover handles, user listing, direct room resolution, direct message delivery, and nonparticipant rejection.
-- `apps/mobile/src/types.ts` and `apps/mobile/src/api.ts` - add handle/direct conversation types and API calls.
-- `apps/mobile/src/components/ChatScreen.tsx` - add lobby/direct switching, handle entry, user chips, per-room history loading, and message filtering by active room.
-- `README.md` - document demo handles, personal chat flow, new REST endpoints, and socket room authorization.
+- `apps/server/src/database.ts` - remove seeded demo users, add user creation with uniqueness checks, and keep existing handle migration.
+- `apps/server/src/auth.ts` - add registration that creates a user and returns a JWT session.
+- `apps/server/src/schemas.ts` and `apps/server/src/http.ts` - add validated `POST /api/auth/register`.
+- `apps/server/tests/server.test.ts` - replace seeded-user assumptions with explicit test account creation.
+- `apps/mobile/src/api.ts`, `apps/mobile/src/types.ts`, `apps/mobile/src/App.tsx`, and `apps/mobile/src/components/LoginScreen.tsx` - add sign-up mode and registration API.
+- `apps/mobile/src/components/ChatScreen.tsx` - replace the top chip layout with a WhatsApp-style left sidebar, conversation list, search/open-handle field, account footer, and right-side chat panel.
+- `apps/web/src/App.tsx` and `apps/web/src/styles.css` - add configurable app link, update CTA/nav copy, and remove demo-credential content.
+- `README.md` - document sign-up, app links, and the non-demo local setup.
 
 Verification:
 
@@ -25,4 +23,4 @@ Verification:
 - `npm run test`
 - `npm run build`
 - `npm run verify`
-- Manual smoke: log in as `alex`, open `@mira`, send a private message, log in as `mira`, open `@alex`, confirm history and live messages; confirm `sam` cannot load or send into the Alex/Mira room.
+- Live smoke: register two users, open one from the sidebar by handle, send a direct message, and confirm landing CTA opens the app URL.

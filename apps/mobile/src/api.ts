@@ -3,6 +3,7 @@ import type {
   ChatMessage,
   DirectConversation,
   PublicUser,
+  RegisterInput,
   Session,
 } from "./types";
 
@@ -32,6 +33,18 @@ export async function login(
   });
 
   return parseResponse<Session>(response, "Unable to log in");
+}
+
+export async function register(input: RegisterInput): Promise<Session> {
+  const response = await fetch(`${API_URL}/api/auth/register`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(input),
+  });
+
+  return parseResponse<Session>(response, "Unable to create account");
 }
 
 export async function fetchCurrentUser(token: string): Promise<PublicUser> {

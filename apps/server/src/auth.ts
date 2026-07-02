@@ -2,8 +2,10 @@ import type { NextFunction, Request, Response } from "express";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { toPublicUser, type TalkNestDatabase } from "./database.js";
-import { UnauthorizedError } from "./errors.js";
+import { ConflictError, UnauthorizedError } from "./errors.js";
 import type { AppConfig } from "./config.js";
+import { normalizeHandle } from "./rooms.js";
+import type { RegisterInput } from "./schemas.js";
 import type { AuthTokenPayload, PublicUser } from "./types.js";
 
 declare global {
@@ -27,7 +29,38 @@ export class AuthService {
       throw new UnauthorizedError("Invalid login details");
     }
 
-    const publicUser = toPublicUser(user);
+    return this.createSession(toPublicUser(user));
+  }
+
+  register(input: RegisterInput) {
+    const username = input.username.trim().toLowerCase();
+    const email = input.email.trim().toLowerCase();
+    const handle = normalizeHandle(input.handle);
+
+    if (this.db.findUserByUsername(username)) {
+      throw new ConflictError("Username is already taken");
+    }
+
+    if (this.db.findUserByHandle(handle)) {
+      throw new ConflictError("Handle is already taken");
+    }
+
+    if (this.db.findUserByEmail(email)) {
+      throw new ConflictError("Email is already registered");
+    }
+
+    const user = this.db.createUser({
+      username,
+      email,
+      handle,
+      displayName: input.displayName,
+      passwordHash: bcrypt.hashSync(input.password, 10),
+    });
+
+    return this.createSession(toPublicUser(user));
+  }
+
+  private createSession(publicUser: PublicUser) {
     const token = jwt.sign(
       {
         sub: publicUser.id,

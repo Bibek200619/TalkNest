@@ -16,6 +16,7 @@ import {
   directConversationSchema,
   loginSchema,
   messageQuerySchema,
+  registerSchema,
 } from "./schemas.js";
 
 export function createApp(deps: { db: TalkNestDatabase; config: AppConfig }) {
@@ -41,6 +42,16 @@ export function createApp(deps: { db: TalkNestDatabase; config: AppConfig }) {
       const input = loginSchema.parse(req.body);
       const session = authService.login(input.identifier, input.password);
       res.json(session);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/auth/register", (req, res, next) => {
+    try {
+      const input = registerSchema.parse(req.body);
+      const session = authService.register(input);
+      res.status(201).json(session);
     } catch (error) {
       next(error);
     }

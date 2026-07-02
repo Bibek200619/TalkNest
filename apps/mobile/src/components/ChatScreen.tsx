@@ -10,13 +10,16 @@ import {
   StyleSheet,
   Text,
   TextInput,
+  useWindowDimensions,
   View,
 } from "react-native";
 import { io, type Socket } from "socket.io-client";
 import {
   AtSign,
+  Hash,
   LogOut,
   MessageCircle,
+  Search,
   Send,
   Users,
   Wifi,
@@ -62,10 +65,12 @@ const lobbyConversation: ConversationView = {
   kind: "lobby",
   roomId: ROOM_ID,
   title: "Lobby",
-  subtitle: "Team room",
+  subtitle: "Shared room",
 };
 
 export function ChatScreen({ session, onLogout }: Props) {
+  const { width } = useWindowDimensions();
+  const compact = width < 760;
   const [conversation, setConversation] =
     useState<ConversationView>(lobbyConversation);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -96,7 +101,7 @@ export function ChatScreen({ session, onLogout }: Props) {
       })
       .catch(() => {
         if (active) {
-          setError("Unable to load handles.");
+          setError("Unable to load contacts.");
         }
       });
 
@@ -210,8 +215,8 @@ export function ChatScreen({ session, onLogout }: Props) {
       : "No messages yet";
   const emptyText =
     conversation.kind === "direct"
-      ? "Send a personal message that only this handle can access."
-      : "Start the room with a short note.";
+      ? "Send a private message in this personal thread."
+      : "Start the shared room with a short note.";
 
   const handleOpenLobby = () => {
     setConversation(lobbyConversation);
@@ -302,209 +307,275 @@ export function ChatScreen({ session, onLogout }: Props) {
     <SafeAreaView style={styles.safe}>
       <KeyboardAvoidingView
         behavior={Platform.select({ ios: "padding", default: undefined })}
-        style={styles.shell}
+        style={styles.keyboard}
       >
-        <View style={styles.header}>
-          <View style={styles.headerTitle}>
-            <Text style={styles.title}>TalkNest</Text>
-            <Text style={styles.room}>{conversation.title}</Text>
-            <Text style={styles.account}>
-              {displayHandle(session.user.handle)}
-            </Text>
-          </View>
-          <View style={styles.headerActions}>
-            <View
-              style={[
-                styles.status,
-                connection === "connected" && styles.statusOn,
-              ]}
-            >
-              {connection === "connected" ? (
-                <Wifi color="#1f6f58" size={14} />
-              ) : (
-                <WifiOff color="#a04737" size={14} />
-              )}
-              <Text
-                style={[
-                  styles.statusText,
-                  connection === "connected" && styles.statusTextOn,
-                ]}
-              >
-                {statusLabel}
-              </Text>
-            </View>
-            <Pressable
-              accessibilityRole="button"
-              onPress={onLogout}
-              style={({ pressed }) => [
-                styles.iconButton,
-                pressed ? styles.buttonPressed : null,
-              ]}
-            >
-              <LogOut color="#243a33" size={20} strokeWidth={2.3} />
-            </Pressable>
-          </View>
-        </View>
-
-        <View style={styles.conversationTools}>
-          <ScrollView
-            contentContainerStyle={styles.threadList}
-            horizontal
-            showsHorizontalScrollIndicator={false}
+        <View
+          style={[styles.appShell, compact ? styles.appShellCompact : null]}
+        >
+          <View
+            style={[styles.sidebar, compact ? styles.sidebarCompact : null]}
           >
-            <Pressable
-              accessibilityRole="button"
-              onPress={handleOpenLobby}
-              style={({ pressed }) => [
-                styles.threadChip,
-                conversation.kind === "lobby" ? styles.threadChipActive : null,
-                pressed ? styles.buttonPressed : null,
-              ]}
-            >
-              <Users
-                color={conversation.kind === "lobby" ? "#f8faf7" : "#1f4038"}
-                size={16}
-              />
-              <Text
+            <View style={styles.sidebarHeader}>
+              <View>
+                <Text style={styles.brand}>TalkNest</Text>
+                <Text style={styles.accountHandle}>
+                  {displayHandle(session.user.handle)}
+                </Text>
+              </View>
+              <View
                 style={[
-                  styles.threadText,
-                  conversation.kind === "lobby"
-                    ? styles.threadTextActive
-                    : null,
+                  styles.statusDot,
+                  connection === "connected" ? styles.statusDotOn : null,
                 ]}
               >
-                Lobby
-              </Text>
-            </Pressable>
+                {connection === "connected" ? (
+                  <Wifi color="#1f6f58" size={15} />
+                ) : (
+                  <WifiOff color="#a04737" size={15} />
+                )}
+              </View>
+            </View>
 
-            {visibleUsers.map((user) => {
-              const selected =
-                conversation.kind === "direct" &&
-                conversation.participant.id === user.id;
+            <View style={styles.handleSearch}>
+              <Search color="#557168" size={18} />
+              <TextInput
+                autoCapitalize="none"
+                autoCorrect={false}
+                editable={!joining}
+                onChangeText={setHandleDraft}
+                onSubmitEditing={handleOpenDirectFromDraft}
+                placeholder="Search or enter handle"
+                placeholderTextColor="#7a8e86"
+                returnKeyType="go"
+                style={styles.handleInput}
+                value={handleDraft}
+              />
+              <Pressable
+                accessibilityRole="button"
+                disabled={!canOpenHandle}
+                onPress={handleOpenDirectFromDraft}
+                style={({ pressed }) => [
+                  styles.openButton,
+                  pressed && canOpenHandle ? styles.buttonPressed : null,
+                  !canOpenHandle ? styles.openDisabled : null,
+                ]}
+              >
+                {joining ? (
+                  <ActivityIndicator color="#f8faf7" size="small" />
+                ) : (
+                  <MessageCircle color="#f8faf7" size={17} strokeWidth={2.4} />
+                )}
+              </Pressable>
+            </View>
 
-              return (
-                <Pressable
-                  accessibilityRole="button"
+            <ScrollView
+              contentContainerStyle={styles.conversationList}
+              showsVerticalScrollIndicator={false}
+            >
+              <ConversationRow
+                active={conversation.kind === "lobby"}
+                icon="lobby"
+                onPress={handleOpenLobby}
+                subtitle="Shared room"
+                title="Lobby"
+              />
+
+              {visibleUsers.map((user) => (
+                <ConversationRow
+                  active={
+                    conversation.kind === "direct" &&
+                    conversation.participant.id === user.id
+                  }
+                  icon="direct"
                   key={user.id}
                   onPress={() => handleOpenDirectByUser(user)}
-                  style={({ pressed }) => [
-                    styles.threadChip,
-                    selected ? styles.threadChipActive : null,
-                    pressed ? styles.buttonPressed : null,
+                  subtitle={displayHandle(user.handle)}
+                  title={user.displayName}
+                />
+              ))}
+
+              {visibleUsers.length === 0 ? (
+                <View style={styles.noContacts}>
+                  <Text style={styles.noContactsTitle}>No contacts yet</Text>
+                  <Text style={styles.noContactsText}>
+                    Ask another user to create an account, then open their
+                    handle here.
+                  </Text>
+                </View>
+              ) : null}
+            </ScrollView>
+
+            <View style={styles.sidebarFooter}>
+              <View style={styles.avatar}>
+                <Text style={styles.avatarText}>
+                  {session.user.displayName.slice(0, 1).toUpperCase()}
+                </Text>
+              </View>
+              <View style={styles.footerUser}>
+                <Text style={styles.footerName}>
+                  {session.user.displayName}
+                </Text>
+                <Text style={styles.footerStatus}>{statusLabel}</Text>
+              </View>
+              <Pressable
+                accessibilityRole="button"
+                onPress={onLogout}
+                style={({ pressed }) => [
+                  styles.logoutButton,
+                  pressed ? styles.buttonPressed : null,
+                ]}
+              >
+                <LogOut color="#243a33" size={19} strokeWidth={2.3} />
+              </Pressable>
+            </View>
+          </View>
+
+          <View style={styles.chatPanel}>
+            <View style={styles.chatHeader}>
+              <View style={styles.chatTitleBlock}>
+                <Text style={styles.chatTitle}>{conversation.title}</Text>
+                <Text style={styles.chatSubtitle}>{conversation.subtitle}</Text>
+              </View>
+              <View
+                style={[
+                  styles.statusPill,
+                  connection === "connected" ? styles.statusPillOn : null,
+                ]}
+              >
+                {connection === "connected" ? (
+                  <Wifi color="#1f6f58" size={14} />
+                ) : (
+                  <WifiOff color="#a04737" size={14} />
+                )}
+                <Text
+                  style={[
+                    styles.statusText,
+                    connection === "connected" ? styles.statusTextOn : null,
                   ]}
                 >
-                  <AtSign color={selected ? "#f8faf7" : "#1f4038"} size={15} />
-                  <Text
-                    style={[
-                      styles.threadText,
-                      selected ? styles.threadTextActive : null,
-                    ]}
-                  >
-                    {user.handle}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </ScrollView>
+                  {statusLabel}
+                </Text>
+              </View>
+            </View>
 
-          <View style={styles.handleBar}>
-            <AtSign color="#43635a" size={18} />
-            <TextInput
-              autoCapitalize="none"
-              autoCorrect={false}
-              editable={!joining}
-              onChangeText={setHandleDraft}
-              onSubmitEditing={handleOpenDirectFromDraft}
-              placeholder="Open handle"
-              placeholderTextColor="#788a84"
-              returnKeyType="go"
-              style={styles.handleInput}
-              value={handleDraft}
-            />
-            <Pressable
-              accessibilityRole="button"
-              disabled={!canOpenHandle}
-              onPress={handleOpenDirectFromDraft}
-              style={({ pressed }) => [
-                styles.openButton,
-                pressed && canOpenHandle ? styles.buttonPressed : null,
-                !canOpenHandle ? styles.openDisabled : null,
-              ]}
-            >
-              {joining ? (
-                <ActivityIndicator color="#f8faf7" />
-              ) : (
-                <MessageCircle color="#f8faf7" size={18} strokeWidth={2.4} />
-              )}
-            </Pressable>
-          </View>
-        </View>
-
-        {loading ? (
-          <View style={styles.center}>
-            <ActivityIndicator color="#143f37" />
-          </View>
-        ) : (
-          <FlatList
-            contentContainerStyle={[
-              styles.messages,
-              messages.length === 0 ? styles.emptyContainer : null,
-            ]}
-            data={messages}
-            keyExtractor={(item) => item.id}
-            onContentSizeChange={() =>
-              listRef.current?.scrollToEnd({ animated: true })
-            }
-            ref={listRef}
-            renderItem={({ item }) => (
-              <MessageBubble
-                message={item}
-                own={item.senderId === session.user.id}
+            {loading ? (
+              <View style={styles.center}>
+                <ActivityIndicator color="#143f37" />
+              </View>
+            ) : (
+              <FlatList
+                contentContainerStyle={[
+                  styles.messages,
+                  messages.length === 0 ? styles.emptyContainer : null,
+                ]}
+                data={messages}
+                keyExtractor={(item) => item.id}
+                onContentSizeChange={() =>
+                  listRef.current?.scrollToEnd({ animated: true })
+                }
+                ref={listRef}
+                renderItem={({ item }) => (
+                  <MessageBubble
+                    message={item}
+                    own={item.senderId === session.user.id}
+                  />
+                )}
+                ListEmptyComponent={
+                  <View style={styles.empty}>
+                    <Users color="#6f8c83" size={28} />
+                    <Text style={styles.emptyTitle}>{emptyTitle}</Text>
+                    <Text style={styles.emptyText}>{emptyText}</Text>
+                  </View>
+                }
               />
             )}
-            ListEmptyComponent={
-              <View style={styles.empty}>
-                <Text style={styles.emptyTitle}>{emptyTitle}</Text>
-                <Text style={styles.emptyText}>{emptyText}</Text>
-              </View>
-            }
-          />
-        )}
 
-        {error && <Text style={styles.error}>{error}</Text>}
+            {error && <Text style={styles.error}>{error}</Text>}
 
-        <View style={styles.composer}>
-          <TextInput
-            multiline
-            onChangeText={setDraft}
-            placeholder={
-              conversation.kind === "direct"
-                ? `Message ${conversation.subtitle}`
-                : "Message lobby"
-            }
-            placeholderTextColor="#788a84"
-            style={styles.messageInput}
-            value={draft}
-          />
-          <Pressable
-            accessibilityRole="button"
-            disabled={!canSend}
-            onPress={handleSend}
-            style={({ pressed }) => [
-              styles.sendButton,
-              pressed && canSend ? styles.buttonPressed : null,
-              !canSend ? styles.sendDisabled : null,
-            ]}
-          >
-            {sending ? (
-              <ActivityIndicator color="#f8faf7" />
-            ) : (
-              <Send color="#f8faf7" size={20} strokeWidth={2.4} />
-            )}
-          </Pressable>
+            <View style={styles.composer}>
+              <TextInput
+                multiline
+                onChangeText={setDraft}
+                placeholder={
+                  conversation.kind === "direct"
+                    ? `Message ${conversation.subtitle}`
+                    : "Message lobby"
+                }
+                placeholderTextColor="#788a84"
+                style={styles.messageInput}
+                value={draft}
+              />
+              <Pressable
+                accessibilityRole="button"
+                disabled={!canSend}
+                onPress={handleSend}
+                style={({ pressed }) => [
+                  styles.sendButton,
+                  pressed && canSend ? styles.buttonPressed : null,
+                  !canSend ? styles.sendDisabled : null,
+                ]}
+              >
+                {sending ? (
+                  <ActivityIndicator color="#f8faf7" />
+                ) : (
+                  <Send color="#f8faf7" size={20} strokeWidth={2.4} />
+                )}
+              </Pressable>
+            </View>
+          </View>
         </View>
       </KeyboardAvoidingView>
     </SafeAreaView>
+  );
+}
+
+type ConversationRowProps = {
+  active: boolean;
+  icon: "lobby" | "direct";
+  onPress: () => void;
+  subtitle: string;
+  title: string;
+};
+
+function ConversationRow({
+  active,
+  icon,
+  onPress,
+  subtitle,
+  title,
+}: ConversationRowProps) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.conversationRow,
+        active ? styles.conversationRowActive : null,
+        pressed ? styles.buttonPressed : null,
+      ]}
+    >
+      <View style={[styles.rowAvatar, active ? styles.rowAvatarActive : null]}>
+        {icon === "lobby" ? (
+          <Hash color={active ? "#f8faf7" : "#36584f"} size={18} />
+        ) : (
+          <AtSign color={active ? "#f8faf7" : "#36584f"} size={18} />
+        )}
+      </View>
+      <View style={styles.rowText}>
+        <Text
+          numberOfLines={1}
+          style={[styles.rowTitle, active ? styles.rowTitleActive : null]}
+        >
+          {title}
+        </Text>
+        <Text
+          numberOfLines={1}
+          style={[styles.rowSubtitle, active ? styles.rowSubtitleActive : null]}
+        >
+          {subtitle}
+        </Text>
+      </View>
+    </Pressable>
   );
 }
 
@@ -533,120 +604,77 @@ function normalizeHandleInput(handle: string) {
 
 const styles = StyleSheet.create({
   safe: {
-    backgroundColor: "#f2f6f3",
+    backgroundColor: "#e6ede9",
     flex: 1,
   },
-  shell: {
+  keyboard: {
     flex: 1,
   },
-  header: {
-    alignItems: "center",
+  appShell: {
+    backgroundColor: "#f6faf7",
+    flex: 1,
+    flexDirection: "row",
+  },
+  appShellCompact: {
+    flexDirection: "column",
+  },
+  sidebar: {
     backgroundColor: "#ffffff",
-    borderBottomColor: "#dce8e2",
+    borderRightColor: "#d4e2dc",
+    borderRightWidth: 1,
+    maxWidth: 380,
+    minWidth: 310,
+    width: "32%",
+  },
+  sidebarCompact: {
+    borderBottomColor: "#d4e2dc",
     borderBottomWidth: 1,
+    borderRightWidth: 0,
+    maxHeight: 300,
+    maxWidth: "100%",
+    minWidth: 0,
+    width: "100%",
+  },
+  sidebarHeader: {
+    alignItems: "center",
     flexDirection: "row",
     justifyContent: "space-between",
-    paddingHorizontal: 16,
-    paddingVertical: 12,
+    minHeight: 76,
+    paddingHorizontal: 18,
+    paddingVertical: 14,
   },
-  headerTitle: {
-    flex: 1,
-    paddingRight: 12,
-  },
-  title: {
+  brand: {
     color: "#13231e",
-    fontSize: 21,
+    fontSize: 24,
     fontWeight: "800",
     letterSpacing: 0,
   },
-  room: {
-    color: "#314940",
-    fontSize: 14,
-    fontWeight: "800",
+  accountHandle: {
+    color: "#6a7d76",
+    fontSize: 13,
     marginTop: 2,
   },
-  account: {
-    color: "#6b7d77",
-    fontSize: 12,
-    marginTop: 1,
-  },
-  headerActions: {
-    alignItems: "center",
-    flexDirection: "row",
-    gap: 8,
-  },
-  status: {
+  statusDot: {
     alignItems: "center",
     backgroundColor: "#f7e9e4",
-    borderRadius: 999,
-    flexDirection: "row",
-    gap: 5,
-    minHeight: 32,
-    paddingHorizontal: 10,
+    borderRadius: 8,
+    height: 34,
+    justifyContent: "center",
+    width: 34,
   },
-  statusOn: {
+  statusDotOn: {
     backgroundColor: "#e0f0e9",
   },
-  statusText: {
-    color: "#a04737",
-    fontSize: 12,
-    fontWeight: "800",
-  },
-  statusTextOn: {
-    color: "#1f6f58",
-  },
-  iconButton: {
-    alignItems: "center",
-    backgroundColor: "#edf4f0",
-    borderRadius: 8,
-    height: 40,
-    justifyContent: "center",
-    width: 40,
-  },
-  conversationTools: {
-    backgroundColor: "#ffffff",
-    borderBottomColor: "#dce8e2",
-    borderBottomWidth: 1,
-    paddingBottom: 12,
-    paddingTop: 10,
-  },
-  threadList: {
-    gap: 8,
-    paddingHorizontal: 14,
-  },
-  threadChip: {
-    alignItems: "center",
-    backgroundColor: "#edf4f0",
-    borderColor: "#d2e1da",
-    borderRadius: 8,
-    borderWidth: 1,
-    flexDirection: "row",
-    gap: 5,
-    minHeight: 36,
-    paddingHorizontal: 11,
-  },
-  threadChipActive: {
-    backgroundColor: "#143f37",
-    borderColor: "#143f37",
-  },
-  threadText: {
-    color: "#1f4038",
-    fontSize: 13,
-    fontWeight: "800",
-  },
-  threadTextActive: {
-    color: "#f8faf7",
-  },
-  handleBar: {
+  handleSearch: {
     alignItems: "center",
     backgroundColor: "#f2f6f3",
-    borderColor: "#d1ded8",
+    borderColor: "#d5e2dc",
     borderRadius: 8,
     borderWidth: 1,
     flexDirection: "row",
     gap: 8,
     marginHorizontal: 14,
-    marginTop: 10,
+    marginBottom: 12,
     minHeight: 46,
     paddingLeft: 12,
     paddingRight: 6,
@@ -664,10 +692,164 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     height: 34,
     justifyContent: "center",
-    width: 42,
+    width: 40,
   },
   openDisabled: {
     opacity: 0.45,
+  },
+  conversationList: {
+    gap: 4,
+    paddingBottom: 14,
+    paddingHorizontal: 10,
+  },
+  conversationRow: {
+    alignItems: "center",
+    borderRadius: 8,
+    flexDirection: "row",
+    gap: 12,
+    minHeight: 68,
+    paddingHorizontal: 10,
+  },
+  conversationRowActive: {
+    backgroundColor: "#e6f1ec",
+  },
+  rowAvatar: {
+    alignItems: "center",
+    backgroundColor: "#edf4f0",
+    borderRadius: 8,
+    height: 42,
+    justifyContent: "center",
+    width: 42,
+  },
+  rowAvatarActive: {
+    backgroundColor: "#143f37",
+  },
+  rowText: {
+    flex: 1,
+    minWidth: 0,
+  },
+  rowTitle: {
+    color: "#152720",
+    fontSize: 15,
+    fontWeight: "800",
+  },
+  rowTitleActive: {
+    color: "#10201b",
+  },
+  rowSubtitle: {
+    color: "#6e807a",
+    fontSize: 13,
+    marginTop: 3,
+  },
+  rowSubtitleActive: {
+    color: "#3d6258",
+  },
+  noContacts: {
+    padding: 14,
+  },
+  noContactsTitle: {
+    color: "#263a34",
+    fontSize: 14,
+    fontWeight: "800",
+  },
+  noContactsText: {
+    color: "#697b75",
+    fontSize: 13,
+    lineHeight: 19,
+    marginTop: 4,
+  },
+  sidebarFooter: {
+    alignItems: "center",
+    borderTopColor: "#dce8e2",
+    borderTopWidth: 1,
+    flexDirection: "row",
+    gap: 10,
+    minHeight: 68,
+    paddingHorizontal: 14,
+  },
+  avatar: {
+    alignItems: "center",
+    backgroundColor: "#143f37",
+    borderRadius: 8,
+    height: 40,
+    justifyContent: "center",
+    width: 40,
+  },
+  avatarText: {
+    color: "#f8faf7",
+    fontSize: 16,
+    fontWeight: "800",
+  },
+  footerUser: {
+    flex: 1,
+    minWidth: 0,
+  },
+  footerName: {
+    color: "#13231e",
+    fontSize: 14,
+    fontWeight: "800",
+  },
+  footerStatus: {
+    color: "#6d8079",
+    fontSize: 12,
+    marginTop: 2,
+  },
+  logoutButton: {
+    alignItems: "center",
+    backgroundColor: "#edf4f0",
+    borderRadius: 8,
+    height: 38,
+    justifyContent: "center",
+    width: 38,
+  },
+  chatPanel: {
+    backgroundColor: "#f2f6f3",
+    flex: 1,
+  },
+  chatHeader: {
+    alignItems: "center",
+    backgroundColor: "#ffffff",
+    borderBottomColor: "#dce8e2",
+    borderBottomWidth: 1,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    minHeight: 76,
+    paddingHorizontal: 18,
+    paddingVertical: 12,
+  },
+  chatTitleBlock: {
+    flex: 1,
+    paddingRight: 12,
+  },
+  chatTitle: {
+    color: "#13231e",
+    fontSize: 20,
+    fontWeight: "800",
+  },
+  chatSubtitle: {
+    color: "#657871",
+    fontSize: 13,
+    marginTop: 2,
+  },
+  statusPill: {
+    alignItems: "center",
+    backgroundColor: "#f7e9e4",
+    borderRadius: 999,
+    flexDirection: "row",
+    gap: 5,
+    minHeight: 32,
+    paddingHorizontal: 10,
+  },
+  statusPillOn: {
+    backgroundColor: "#e0f0e9",
+  },
+  statusText: {
+    color: "#a04737",
+    fontSize: 12,
+    fontWeight: "800",
+  },
+  statusTextOn: {
+    color: "#1f6f58",
   },
   center: {
     alignItems: "center",
@@ -675,7 +857,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   messages: {
-    padding: 14,
+    padding: 18,
   },
   emptyContainer: {
     flexGrow: 1,
@@ -690,6 +872,7 @@ const styles = StyleSheet.create({
     color: "#263a34",
     fontSize: 18,
     fontWeight: "800",
+    marginTop: 10,
     textAlign: "center",
   },
   emptyText: {
@@ -702,7 +885,7 @@ const styles = StyleSheet.create({
   error: {
     color: "#a33f32",
     fontSize: 13,
-    paddingHorizontal: 16,
+    paddingHorizontal: 18,
     paddingVertical: 8,
   },
   composer: {

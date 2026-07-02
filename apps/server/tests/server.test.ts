@@ -15,6 +15,17 @@ const testConfig = loadConfig({
   MESSAGE_MAX_LENGTH: "1000",
 });
 
+type TestSession = {
+  token: string;
+  user: {
+    id: string;
+    username: string;
+    handle: string;
+    displayName: string;
+    email: string;
+  };
+};
+
 describe("TalkNest server", () => {
   let runtime: ReturnType<typeof createRuntime>;
   let baseUrl: string;
@@ -30,62 +41,128 @@ describe("TalkNest server", () => {
     await runtime.close();
   });
 
-  it("logs in a seeded user and returns a token", async () => {
+  it("does not seed demo users", async () => {
     const response = await request(runtime.httpServer)
       .post("/api/auth/login")
       .send({ identifier: "alex", password: "password123" })
-      .expect(200);
+      .expect(401);
 
-    expect(response.body.token).toEqual(expect.any(String));
-    expect(response.body.user).toMatchObject({
-      username: "alex",
-      handle: "alex",
-      displayName: "Alex Rivera",
+    expect(response.body.error.message).toBe("Invalid login details");
+  });
+
+  it("registers a user and then logs in with the same credentials", async () => {
+    const registered = await registerUser({
+      username: "priya",
+      handle: "priya",
+      email: "priya@talknest.test",
+      displayName: "Priya Shah",
     });
+
+    expect(registered.token).toEqual(expect.any(String));
+    expect(registered.user).toMatchObject({
+      username: "priya",
+      handle: "priya",
+      email: "priya@talknest.test",
+      displayName: "Priya Shah",
+    });
+
+    const loggedIn = await login("priya");
+    expect(loggedIn.user.id).toBe(registered.user.id);
+  });
+
+  it("rejects duplicate handles during registration", async () => {
+    await registerUser({
+      username: "first",
+      handle: "shared",
+      email: "first@talknest.test",
+      displayName: "First User",
+    });
+
+    const response = await request(runtime.httpServer)
+      .post("/api/auth/register")
+      .send({
+        username: "second",
+        handle: "@shared",
+        email: "second@talknest.test",
+        displayName: "Second User",
+        password: "password123",
+      })
+      .expect(409);
+
+    expect(response.body.error.message).toBe("Handle is already taken");
   });
 
   it("lists public users with handles", async () => {
-    const alex = await login("alex");
+    const priya = await registerUser({
+      username: "priya",
+      handle: "priya",
+      email: "priya@talknest.test",
+      displayName: "Priya Shah",
+    });
+    await registerUser({
+      username: "noah",
+      handle: "noah",
+      email: "noah@talknest.test",
+      displayName: "Noah Kim",
+    });
 
     const response = await request(runtime.httpServer)
       .get("/api/users")
-      .set("Authorization", `Bearer ${alex.token}`)
+      .set("Authorization", `Bearer ${priya.token}`)
       .expect(200);
 
     expect(response.body.users).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          username: "mira",
-          handle: "mira",
-          displayName: "Mira Chen",
+          username: "noah",
+          handle: "noah",
+          displayName: "Noah Kim",
         }),
       ]),
     );
   });
 
   it("resolves personal conversations by handle", async () => {
-    const alex = await login("alex");
+    const priya = await registerUser({
+      username: "priya",
+      handle: "priya",
+      email: "priya@talknest.test",
+      displayName: "Priya Shah",
+    });
+    const noah = await registerUser({
+      username: "noah",
+      handle: "noah",
+      email: "noah@talknest.test",
+      displayName: "Noah Kim",
+    });
 
     const response = await request(runtime.httpServer)
       .post("/api/direct-conversations/resolve")
-      .set("Authorization", `Bearer ${alex.token}`)
-      .send({ handle: "@mira" })
+      .set("Authorization", `Bearer ${priya.token}`)
+      .send({ handle: "@noah" })
       .expect(200);
 
     expect(response.body.conversation).toMatchObject({
-      roomId: getDirectRoomId("user-alex", "user-mira"),
+      roomId: getDirectRoomId(priya.user.id, noah.user.id),
       type: "direct",
       participant: {
-        handle: "mira",
-        displayName: "Mira Chen",
+        handle: "noah",
+        displayName: "Noah Kim",
       },
     });
   });
 
   it("rejects invalid login details", async () => {
+    await registerUser({
+      username: "priya",
+      handle: "priya",
+      email: "priya@talknest.test",
+      displayName: "Priya Shah",
+    });
+
     const response = await request(runtime.httpServer)
       .post("/api/auth/login")
-      .send({ identifier: "alex", password: "bad-password" })
+      .send({ identifier: "priya", password: "bad-password" })
       .expect(401);
 
     expect(response.body.error.message).toBe("Invalid login details");
@@ -96,37 +173,52 @@ describe("TalkNest server", () => {
   });
 
   it("broadcasts socket messages with server timestamps", async () => {
-    const alex = await login("alex");
-    const mira = await login("mira");
+    const priya = await registerUser({
+      username: "priya",
+      handle: "priya",
+      email: "priya@talknest.test",
+      displayName: "Priya Shah",
+    });
+    const noah = await registerUser({
+      username: "noah",
+      handle: "noah",
+      email: "noah@talknest.test",
+      displayName: "Noah Kim",
+    });
 
-    const alexSocket = await connectSocket(alex.token);
-    const miraSocket = await connectSocket(mira.token);
-    const received = waitForMessage(miraSocket);
+    const priyaSocket = await connectSocket(priya.token);
+    const noahSocket = await connectSocket(noah.token);
+    const received = waitForMessage(noahSocket);
 
-    const ack = await emitMessage(alexSocket, {
+    const ack = await emitMessage(priyaSocket, {
       roomId: "lobby",
-      text: "Hello from Alex",
+      text: "Hello from Priya",
     });
 
     expect(ack.ok).toBe(true);
     const message = await received;
 
     expect(message).toMatchObject({
-      senderId: alex.user.id,
-      senderName: "Alex Rivera",
-      text: "Hello from Alex",
+      senderId: priya.user.id,
+      senderName: "Priya Shah",
+      text: "Hello from Priya",
       type: "text",
       roomId: "lobby",
     });
     expect(Date.parse(message.timestamp)).not.toBeNaN();
 
-    alexSocket.close();
-    miraSocket.close();
+    priyaSocket.close();
+    noahSocket.close();
   });
 
   it("does not accept empty socket messages", async () => {
-    const alex = await login("alex");
-    const socket = await connectSocket(alex.token);
+    const priya = await registerUser({
+      username: "priya",
+      handle: "priya",
+      email: "priya@talknest.test",
+      displayName: "Priya Shah",
+    });
+    const socket = await connectSocket(priya.token);
 
     const ack = await emitMessage(socket, {
       roomId: "lobby",
@@ -138,24 +230,34 @@ describe("TalkNest server", () => {
   });
 
   it("broadcasts direct messages only in the resolved personal room", async () => {
-    const alex = await login("alex");
-    const mira = await login("mira");
-    const roomId = await resolveDirectRoom(alex.token, "@mira");
+    const priya = await registerUser({
+      username: "priya",
+      handle: "priya",
+      email: "priya@talknest.test",
+      displayName: "Priya Shah",
+    });
+    const noah = await registerUser({
+      username: "noah",
+      handle: "noah",
+      email: "noah@talknest.test",
+      displayName: "Noah Kim",
+    });
+    const roomId = await resolveDirectRoom(priya.token, "@noah");
 
-    const alexSocket = await connectSocket(alex.token);
-    const miraSocket = await connectSocket(mira.token);
+    const priyaSocket = await connectSocket(priya.token);
+    const noahSocket = await connectSocket(noah.token);
 
-    await expect(joinRoom(alexSocket, roomId)).resolves.toEqual({
+    await expect(joinRoom(priyaSocket, roomId)).resolves.toEqual({
       ok: true,
       roomId,
     });
-    await expect(joinRoom(miraSocket, roomId)).resolves.toEqual({
+    await expect(joinRoom(noahSocket, roomId)).resolves.toEqual({
       ok: true,
       roomId,
     });
 
-    const received = waitForMessage(miraSocket);
-    const ack = await emitMessage(alexSocket, {
+    const received = waitForMessage(noahSocket);
+    const ack = await emitMessage(priyaSocket, {
       roomId,
       text: "Private hello",
     });
@@ -164,8 +266,8 @@ describe("TalkNest server", () => {
     const message = await received;
 
     expect(message).toMatchObject({
-      senderId: alex.user.id,
-      senderName: "Alex Rivera",
+      senderId: priya.user.id,
+      senderName: "Priya Shah",
       text: "Private hello",
       type: "text",
       roomId,
@@ -173,7 +275,7 @@ describe("TalkNest server", () => {
 
     const history = await request(runtime.httpServer)
       .get("/api/messages")
-      .set("Authorization", `Bearer ${mira.token}`)
+      .set("Authorization", `Bearer ${noah.token}`)
       .query({ roomId })
       .expect(200);
 
@@ -183,28 +285,44 @@ describe("TalkNest server", () => {
       roomId,
     });
 
-    alexSocket.close();
-    miraSocket.close();
+    priyaSocket.close();
+    noahSocket.close();
   });
 
   it("rejects nonparticipants from personal conversations", async () => {
-    const alex = await login("alex");
-    const sam = await login("sam");
-    const roomId = await resolveDirectRoom(alex.token, "mira");
-    const samSocket = await connectSocket(sam.token);
+    const priya = await registerUser({
+      username: "priya",
+      handle: "priya",
+      email: "priya@talknest.test",
+      displayName: "Priya Shah",
+    });
+    await registerUser({
+      username: "noah",
+      handle: "noah",
+      email: "noah@talknest.test",
+      displayName: "Noah Kim",
+    });
+    const li = await registerUser({
+      username: "li",
+      handle: "li",
+      email: "li@talknest.test",
+      displayName: "Li Wang",
+    });
+    const roomId = await resolveDirectRoom(priya.token, "noah");
+    const liSocket = await connectSocket(li.token);
 
     await request(runtime.httpServer)
       .get("/api/messages")
-      .set("Authorization", `Bearer ${sam.token}`)
+      .set("Authorization", `Bearer ${li.token}`)
       .query({ roomId })
       .expect(403);
 
-    await expect(joinRoom(samSocket, roomId)).resolves.toEqual({
+    await expect(joinRoom(liSocket, roomId)).resolves.toEqual({
       ok: false,
       error: "You do not have access to this conversation",
     });
     await expect(
-      emitMessage(samSocket, {
+      emitMessage(liSocket, {
         roomId,
         text: "Trying to enter",
       }),
@@ -213,25 +331,30 @@ describe("TalkNest server", () => {
       error: "You do not have access to this conversation",
     });
 
-    samSocket.close();
+    liSocket.close();
   });
 
-  async function login(username: string) {
+  async function registerUser(input: {
+    username: string;
+    handle: string;
+    email: string;
+    displayName: string;
+  }) {
+    const response = await request(runtime.httpServer)
+      .post("/api/auth/register")
+      .send({ ...input, password: "password123" })
+      .expect(201);
+
+    return response.body as TestSession;
+  }
+
+  async function login(identifier: string) {
     const response = await request(runtime.httpServer)
       .post("/api/auth/login")
-      .send({ identifier: username, password: "password123" })
+      .send({ identifier, password: "password123" })
       .expect(200);
 
-    return response.body as {
-      token: string;
-      user: {
-        id: string;
-        username: string;
-        handle: string;
-        displayName: string;
-        email: string;
-      };
-    };
+    return response.body as TestSession;
   }
 
   async function resolveDirectRoom(token: string, handle: string) {

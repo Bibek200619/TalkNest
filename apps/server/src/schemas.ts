@@ -5,6 +5,34 @@ export const loginSchema = z.object({
   password: z.string().min(1, "Password is required"),
 });
 
+export const registerSchema = z.object({
+  username: z
+    .string()
+    .trim()
+    .min(2, "Username must be at least 2 characters")
+    .max(32, "Username must be 32 characters or less")
+    .regex(
+      /^[a-z0-9][a-z0-9._-]*$/i,
+      "Username can contain letters, numbers, dots, underscores, and dashes",
+    ),
+  handle: z
+    .string()
+    .trim()
+    .min(2, "Handle must be at least 2 characters")
+    .max(32, "Handle must be 32 characters or less")
+    .regex(
+      /^@?[a-z0-9][a-z0-9._-]*$/i,
+      "Handle can contain letters, numbers, dots, underscores, and dashes",
+    ),
+  email: z.string().trim().email("Enter a valid email"),
+  displayName: z
+    .string()
+    .trim()
+    .min(1, "Display name is required")
+    .max(80, "Display name must be 80 characters or less"),
+  password: z.string().min(8, "Password must be at least 8 characters"),
+});
+
 export const messageInputSchema = z.object({
   roomId: z.string().trim().min(1).max(80).default("lobby"),
   text: z.string().trim().min(1, "Message cannot be empty").max(1000),
@@ -28,4 +56,5 @@ export const directConversationSchema = z.object({
 });
 
 export type LoginInput = z.infer<typeof loginSchema>;
+export type RegisterInput = z.infer<typeof registerSchema>;
 export type MessageInput = z.infer<typeof messageInputSchema>;

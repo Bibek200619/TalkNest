@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import bcrypt from "bcryptjs";
 import {
   getDirectRoomId,
   LOBBY_ROOM_ID,
@@ -15,6 +14,14 @@ import type {
   PublicUser,
   UserRecord,
 } from "./types.js";
+
+type CreateUserInput = {
+  username: string;
+  handle: string;
+  email: string;
+  displayName: string;
+  passwordHash: string;
+};
 
 type UserRow = {
   id: string;
@@ -36,29 +43,7 @@ type MessageRow = {
   room_id: string;
 };
 
-const seedUsers = [
-  {
-    id: "user-alex",
-    username: "alex",
-    handle: "alex",
-    email: "alex@talknest.local",
-    displayName: "Alex Rivera",
-  },
-  {
-    id: "user-mira",
-    username: "mira",
-    handle: "mira",
-    email: "mira@talknest.local",
-    displayName: "Mira Chen",
-  },
-  {
-    id: "user-sam",
-    username: "sam",
-    handle: "sam",
-    email: "sam@talknest.local",
-    displayName: "Sam Patel",
-  },
-] as const;
+const legacyDemoUserIds = ["user-alex", "user-mira", "user-sam"];
 
 export class TalkNestDatabase {
   private readonly db: DatabaseSync;
@@ -72,7 +57,6 @@ export class TalkNestDatabase {
     this.db.exec("PRAGMA foreign_keys = ON");
     this.db.exec("PRAGMA journal_mode = WAL");
     this.initializeSchema();
-    this.seedDemoUsers();
   }
 
   findUserByIdentifier(identifier: string): UserRecord | null {
@@ -104,6 +88,32 @@ export class TalkNestDatabase {
     return row ? mapUserRow(row) : null;
   }
 
+  findUserByUsername(username: string): UserRecord | null {
+    const row = this.db
+      .prepare(
+        `SELECT id, username, handle, email, display_name, password_hash, created_at
+         FROM users
+         WHERE lower(username) = ?
+         LIMIT 1`,
+      )
+      .get(username.trim().toLowerCase()) as UserRow | undefined;
+
+    return row ? mapUserRow(row) : null;
+  }
+
+  findUserByEmail(email: string): UserRecord | null {
+    const row = this.db
+      .prepare(
+        `SELECT id, username, handle, email, display_name, password_hash, created_at
+         FROM users
+         WHERE lower(email) = ?
+         LIMIT 1`,
+      )
+      .get(email.trim().toLowerCase()) as UserRow | undefined;
+
+    return row ? mapUserRow(row) : null;
+  }
+
   findUserByHandle(handle: string): UserRecord | null {
     const row = this.db
       .prepare(
@@ -115,6 +125,36 @@ export class TalkNestDatabase {
       .get(normalizeHandle(handle)) as UserRow | undefined;
 
     return row ? mapUserRow(row) : null;
+  }
+
+  createUser(input: CreateUserInput): UserRecord {
+    const user: UserRecord = {
+      id: randomUUID(),
+      username: input.username.trim().toLowerCase(),
+      handle: normalizeHandle(input.handle),
+      email: input.email.trim().toLowerCase(),
+      displayName: input.displayName.trim(),
+      passwordHash: input.passwordHash,
+      createdAt: new Date().toISOString(),
+    };
+
+    this.db
+      .prepare(
+        `INSERT INTO users
+         (id, username, handle, email, display_name, password_hash, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        user.id,
+        user.username,
+        user.handle,
+        user.email,
+        user.displayName,
+        user.passwordHash,
+        user.createdAt,
+      );
+
+    return user;
   }
 
   listUsers(): PublicUser[] {
@@ -245,9 +285,16 @@ export class TalkNestDatabase {
     `);
     this.ensureHandleColumn();
     this.db.exec(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_unique
+      ON users (lower(username));
+
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_unique
+      ON users (lower(email));
+
       CREATE UNIQUE INDEX IF NOT EXISTS idx_users_handle_unique
       ON users (lower(handle));
     `);
+    this.removeLegacyDemoData();
   }
 
   private ensureHandleColumn() {
@@ -265,26 +312,26 @@ export class TalkNestDatabase {
     );
   }
 
-  private seedDemoUsers() {
-    const insert = this.db.prepare(
-      `INSERT OR IGNORE INTO users
-       (id, username, handle, email, display_name, password_hash, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    );
-    const passwordHash = bcrypt.hashSync("password123", 10);
-    const createdAt = new Date().toISOString();
+  private removeLegacyDemoData() {
+    const placeholders = legacyDemoUserIds.map(() => "?").join(", ");
 
-    for (const user of seedUsers) {
-      insert.run(
-        user.id,
-        user.username,
-        user.handle,
-        user.email,
-        user.displayName,
-        passwordHash,
-        createdAt,
-      );
-    }
+    this.db
+      .prepare(
+        `DELETE FROM messages
+         WHERE sender_id IN (${placeholders})
+            OR room_id LIKE '%user-alex%'
+            OR room_id LIKE '%user-mira%'
+            OR room_id LIKE '%user-sam%'`,
+      )
+      .run(...legacyDemoUserIds);
+
+    this.db
+      .prepare(
+        `DELETE FROM users
+         WHERE id IN (${placeholders})
+           AND email LIKE '%@talknest.local'`,
+      )
+      .run(...legacyDemoUserIds);
   }
 }
 

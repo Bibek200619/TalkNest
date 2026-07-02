@@ -21,6 +21,14 @@ export type Session = {
   user: PublicUser;
 };
 
+export type RegisterInput = {
+  username: string;
+  handle: string;
+  email: string;
+  displayName: string;
+  password: string;
+};
+
 export type DirectConversation = {
   roomId: string;
   type: "direct";

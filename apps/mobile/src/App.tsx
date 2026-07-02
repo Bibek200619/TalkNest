@@ -1,16 +1,20 @@
 import { useEffect, useState } from "react";
 import { ActivityIndicator, SafeAreaView, StyleSheet } from "react-native";
-import { fetchCurrentUser, login as loginRequest } from "./api";
+import {
+  fetchCurrentUser,
+  login as loginRequest,
+  register as registerRequest,
+} from "./api";
 import { ChatScreen } from "./components/ChatScreen";
 import { LoginScreen } from "./components/LoginScreen";
 import { clearStoredSession, getStoredSession, saveSession } from "./storage";
-import type { Session } from "./types";
+import type { RegisterInput, Session } from "./types";
 
 export default function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [booting, setBooting] = useState(true);
-  const [loginError, setLoginError] = useState<string | null>(null);
-  const [loggingIn, setLoggingIn] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [authing, setAuthing] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -44,24 +48,41 @@ export default function App() {
   }, []);
 
   const handleLogin = async (identifier: string, password: string) => {
-    setLoggingIn(true);
-    setLoginError(null);
+    setAuthing(true);
+    setAuthError(null);
 
     try {
       const nextSession = await loginRequest(identifier, password);
       await saveSession(nextSession);
       setSession(nextSession);
     } catch (error) {
-      setLoginError(error instanceof Error ? error.message : "Unable to log in");
+      setAuthError(error instanceof Error ? error.message : "Unable to log in");
     } finally {
-      setLoggingIn(false);
+      setAuthing(false);
+    }
+  };
+
+  const handleRegister = async (input: RegisterInput) => {
+    setAuthing(true);
+    setAuthError(null);
+
+    try {
+      const nextSession = await registerRequest(input);
+      await saveSession(nextSession);
+      setSession(nextSession);
+    } catch (error) {
+      setAuthError(
+        error instanceof Error ? error.message : "Unable to create account",
+      );
+    } finally {
+      setAuthing(false);
     }
   };
 
   const handleLogout = async () => {
     await clearStoredSession();
     setSession(null);
-    setLoginError(null);
+    setAuthError(null);
   };
 
   if (booting) {
@@ -76,7 +97,14 @@ export default function App() {
     return <ChatScreen session={session} onLogout={handleLogout} />;
   }
 
-  return <LoginScreen error={loginError} loading={loggingIn} onSubmit={handleLogin} />;
+  return (
+    <LoginScreen
+      error={authError}
+      loading={authing}
+      onLogin={handleLogin}
+      onRegister={handleRegister}
+    />
+  );
 }
 
 const styles = StyleSheet.create({
@@ -84,6 +112,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     backgroundColor: "#f7fbf7",
     flex: 1,
-    justifyContent: "center"
-  }
+    justifyContent: "center",
+  },
 });

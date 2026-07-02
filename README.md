@@ -1,11 +1,11 @@
 # TalkNest
 
-TalkNest is a full-stack real-time chat MVP built from the PRD. It includes an Expo React Native app, a Node.js Socket.io backend, SQLite persistence, JWT login, timestamps generated on the server, and a Vite/Three.js landing page.
+TalkNest is a full-stack real-time chat MVP built from the PRD. It includes an Expo React Native app, a Node.js Socket.io backend, SQLite persistence, JWT auth with signup, timestamps generated on the server, and a Vite/Three.js landing page.
 
 ## Apps
 
-- `apps/server` - Express, Socket.io, JWT auth, SQLite via `node:sqlite`, Zod validation, and integration tests.
-- `apps/mobile` - Expo React Native login and chat app with persisted sessions, message history, live updates, logout, and connection state.
+- `apps/server` - Express, Socket.io, JWT auth, registration, SQLite via `node:sqlite`, Zod validation, and integration tests.
+- `apps/mobile` - Expo React Native signup/login and chat app with a sidebar inbox, persisted sessions, message history, live updates, logout, and connection state.
 - `apps/web` - Vite React landing page with a responsive Three.js hero scene.
 
 ## Requirements
@@ -22,11 +22,7 @@ npm install
 cp apps/server/.env.example apps/server/.env
 ```
 
-Demo users are seeded automatically:
-
-- `alex` / `password123` / `@alex`
-- `mira` / `password123` / `@mira`
-- `sam` / `password123` / `@sam`
+No demo users are seeded. Create an account in the app, then create a second account in another browser/session if you want to test personal chat locally.
 
 ## Run Locally
 
@@ -49,6 +45,12 @@ Default URLs:
 - Backend API: `http://localhost:4000`
 - Landing page: `http://localhost:5173`
 - Expo web/mobile dev server: shown by Expo in the terminal
+
+The landing page links to the main app with `VITE_TALKNEST_APP_URL`. It defaults to `http://127.0.0.1:8081` for local Expo web:
+
+```bash
+VITE_TALKNEST_APP_URL=http://127.0.0.1:8081 npm run dev:web
+```
 
 For a physical device, set the mobile app API URL to a LAN-reachable backend:
 
@@ -93,6 +95,7 @@ The real-time chat backend should be deployed separately to a long-running Node 
 ## API
 
 - `GET /health` - service health
+- `POST /api/auth/register` - creates a user and returns `{ token, user }`
 - `POST /api/auth/login` - returns `{ token, user }`
 - `GET /api/auth/me` - validates a bearer token
 - `GET /api/users` - returns public users and their handles
