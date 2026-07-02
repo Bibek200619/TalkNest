@@ -1,6 +1,7 @@
 export type UserRecord = {
   id: string;
   username: string;
+  handle: string;
   email: string;
   displayName: string;
   passwordHash: string;
@@ -10,6 +11,7 @@ export type UserRecord = {
 export type PublicUser = {
   id: string;
   username: string;
+  handle: string;
   email: string;
   displayName: string;
 };
@@ -27,9 +29,16 @@ export type ChatMessage = {
 export type AuthTokenPayload = {
   sub: string;
   username: string;
+  handle: string;
   displayName: string;
 };
 
 export type AuthenticatedSocketData = {
   user: PublicUser;
+};
+
+export type DirectConversation = {
+  roomId: string;
+  type: "direct";
+  participant: PublicUser;
 };

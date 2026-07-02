@@ -17,7 +17,7 @@ declare global {
 export class AuthService {
   constructor(
     private readonly db: TalkNestDatabase,
-    private readonly config: AppConfig
+    private readonly config: AppConfig,
   ) {}
 
   login(identifier: string, password: string) {
@@ -32,10 +32,11 @@ export class AuthService {
       {
         sub: publicUser.id,
         username: publicUser.username,
-        displayName: publicUser.displayName
+        handle: publicUser.handle,
+        displayName: publicUser.displayName,
       } satisfies AuthTokenPayload,
       this.config.jwtSecret,
-      { expiresIn: "7d" }
+      { expiresIn: "7d" },
     );
 
     return { token, user: publicUser };
@@ -43,7 +44,10 @@ export class AuthService {
 
   verifyToken(token: string): PublicUser {
     try {
-      const payload = jwt.verify(token, this.config.jwtSecret) as AuthTokenPayload;
+      const payload = jwt.verify(
+        token,
+        this.config.jwtSecret,
+      ) as AuthTokenPayload;
       const user = this.db.findUserById(payload.sub);
 
       if (!user) {

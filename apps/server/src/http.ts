@@ -5,8 +5,18 @@ import { AuthService, createAuthMiddleware } from "./auth.js";
 import type { AppConfig } from "./config.js";
 import { getCorsOrigin } from "./config.js";
 import type { TalkNestDatabase } from "./database.js";
-import { errorHandler, notFoundHandler, ValidationError } from "./errors.js";
-import { loginSchema, messageQuerySchema } from "./schemas.js";
+import {
+  errorHandler,
+  ForbiddenError,
+  NotFoundError,
+  notFoundHandler,
+  ValidationError,
+} from "./errors.js";
+import {
+  directConversationSchema,
+  loginSchema,
+  messageQuerySchema,
+} from "./schemas.js";
 
 export function createApp(deps: { db: TalkNestDatabase; config: AppConfig }) {
   const app = express();
@@ -17,8 +27,8 @@ export function createApp(deps: { db: TalkNestDatabase; config: AppConfig }) {
   app.use(
     cors({
       origin: getCorsOrigin(deps.config.corsOrigin),
-      credentials: true
-    })
+      credentials: true,
+    }),
   );
   app.use(express.json({ limit: "1mb" }));
 
@@ -40,6 +50,36 @@ export function createApp(deps: { db: TalkNestDatabase; config: AppConfig }) {
     res.json({ user: req.user });
   });
 
+  app.get("/api/users", requireAuth, (_req, res) => {
+    res.json({ users: deps.db.listUsers() });
+  });
+
+  app.post(
+    "/api/direct-conversations/resolve",
+    requireAuth,
+    (req, res, next) => {
+      try {
+        if (!req.user) {
+          throw new ValidationError("Missing authenticated user");
+        }
+
+        const input = directConversationSchema.parse(req.body);
+        const conversation = deps.db.resolveDirectConversation(
+          req.user,
+          input.handle,
+        );
+
+        if (!conversation) {
+          throw new NotFoundError("Handle not found");
+        }
+
+        res.json({ conversation });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
   app.get("/api/messages", requireAuth, (req, res, next) => {
     try {
       if (!req.user) {
@@ -47,6 +87,11 @@ export function createApp(deps: { db: TalkNestDatabase; config: AppConfig }) {
       }
 
       const query = messageQuerySchema.parse(req.query);
+
+      if (!deps.db.canUserAccessRoom(req.user.id, query.roomId)) {
+        throw new ForbiddenError("You do not have access to this conversation");
+      }
+
       const messages = deps.db.listMessages(query.roomId, query.limit);
       res.json({ messages });
     } catch (error) {

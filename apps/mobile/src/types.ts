@@ -1,6 +1,7 @@
 export type PublicUser = {
   id: string;
   username: string;
+  handle: string;
   email: string;
   displayName: string;
 };
@@ -20,9 +21,11 @@ export type Session = {
   user: PublicUser;
 };
 
+export type DirectConversation = {
+  roomId: string;
+  type: "direct";
+  participant: PublicUser;
+};
+
 export type ConnectionState =
-  | "connecting"
-  | "connected"
-  | "reconnecting"
-  | "disconnected"
-  | "error";
+  "connecting" | "connected" | "reconnecting" | "disconnected" | "error";

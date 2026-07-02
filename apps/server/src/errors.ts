@@ -5,7 +5,7 @@ export class AppError extends Error {
   constructor(
     message: string,
     public readonly statusCode = 500,
-    public readonly details?: unknown
+    public readonly details?: unknown,
   ) {
     super(message);
     this.name = "AppError";
@@ -26,6 +26,13 @@ export class UnauthorizedError extends AppError {
   }
 }
 
+export class ForbiddenError extends AppError {
+  constructor(message = "Forbidden") {
+    super(message, 403);
+    this.name = "ForbiddenError";
+  }
+}
+
 export class NotFoundError extends AppError {
   constructor(message = "Not found") {
     super(message, 404);
@@ -33,7 +40,11 @@ export class NotFoundError extends AppError {
   }
 }
 
-export function notFoundHandler(_req: Request, _res: Response, next: NextFunction) {
+export function notFoundHandler(
+  _req: Request,
+  _res: Response,
+  next: NextFunction,
+) {
   next(new NotFoundError("Route not found"));
 }
 
@@ -41,14 +52,14 @@ export function errorHandler(
   error: Error,
   _req: Request,
   res: Response,
-  _next: NextFunction
+  _next: NextFunction,
 ) {
   if (error instanceof ZodError) {
     return res.status(400).json({
       error: {
         message: "Validation failed",
-        details: error.flatten()
-      }
+        details: error.flatten(),
+      },
     });
   }
 
@@ -56,15 +67,15 @@ export function errorHandler(
     return res.status(error.statusCode).json({
       error: {
         message: error.message,
-        details: error.details
-      }
+        details: error.details,
+      },
     });
   }
 
   console.error(error);
   return res.status(500).json({
     error: {
-      message: "Internal server error"
-    }
+      message: "Internal server error",
+    },
   });
 }

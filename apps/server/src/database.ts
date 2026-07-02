@@ -3,11 +3,23 @@ import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import bcrypt from "bcryptjs";
-import type { ChatMessage, PublicUser, UserRecord } from "./types.js";
+import {
+  getDirectRoomId,
+  LOBBY_ROOM_ID,
+  normalizeHandle,
+  parseDirectRoomId,
+} from "./rooms.js";
+import type {
+  ChatMessage,
+  DirectConversation,
+  PublicUser,
+  UserRecord,
+} from "./types.js";
 
 type UserRow = {
   id: string;
   username: string;
+  handle: string;
   email: string;
   display_name: string;
   password_hash: string;
@@ -28,21 +40,24 @@ const seedUsers = [
   {
     id: "user-alex",
     username: "alex",
+    handle: "alex",
     email: "alex@talknest.local",
-    displayName: "Alex Rivera"
+    displayName: "Alex Rivera",
   },
   {
     id: "user-mira",
     username: "mira",
+    handle: "mira",
     email: "mira@talknest.local",
-    displayName: "Mira Chen"
+    displayName: "Mira Chen",
   },
   {
     id: "user-sam",
     username: "sam",
+    handle: "sam",
     email: "sam@talknest.local",
-    displayName: "Sam Patel"
-  }
+    displayName: "Sam Patel",
+  },
 ] as const;
 
 export class TalkNestDatabase {
@@ -61,15 +76,17 @@ export class TalkNestDatabase {
   }
 
   findUserByIdentifier(identifier: string): UserRecord | null {
-    const normalized = identifier.trim().toLowerCase();
+    const normalizedIdentifier = identifier.trim().toLowerCase();
+    const normalizedHandle = normalizeHandle(identifier);
     const row = this.db
       .prepare(
-        `SELECT id, username, email, display_name, password_hash, created_at
+        `SELECT id, username, handle, email, display_name, password_hash, created_at
          FROM users
-         WHERE lower(username) = ? OR lower(email) = ?
-         LIMIT 1`
+         WHERE lower(username) = ? OR lower(email) = ? OR lower(handle) = ?
+         LIMIT 1`,
       )
-      .get(normalized, normalized) as UserRow | undefined;
+      .get(normalizedIdentifier, normalizedIdentifier, normalizedHandle) as
+      UserRow | undefined;
 
     return row ? mapUserRow(row) : null;
   }
@@ -77,14 +94,72 @@ export class TalkNestDatabase {
   findUserById(id: string): UserRecord | null {
     const row = this.db
       .prepare(
-        `SELECT id, username, email, display_name, password_hash, created_at
+        `SELECT id, username, handle, email, display_name, password_hash, created_at
          FROM users
          WHERE id = ?
-         LIMIT 1`
+         LIMIT 1`,
       )
       .get(id) as UserRow | undefined;
 
     return row ? mapUserRow(row) : null;
+  }
+
+  findUserByHandle(handle: string): UserRecord | null {
+    const row = this.db
+      .prepare(
+        `SELECT id, username, handle, email, display_name, password_hash, created_at
+         FROM users
+         WHERE lower(handle) = ?
+         LIMIT 1`,
+      )
+      .get(normalizeHandle(handle)) as UserRow | undefined;
+
+    return row ? mapUserRow(row) : null;
+  }
+
+  listUsers(): PublicUser[] {
+    const rows = this.db
+      .prepare(
+        `SELECT id, username, handle, email, display_name, password_hash, created_at
+         FROM users
+         ORDER BY lower(handle) ASC`,
+      )
+      .all() as UserRow[];
+
+    return rows.map(mapUserRow).map(toPublicUser);
+  }
+
+  resolveDirectConversation(
+    currentUser: PublicUser,
+    handle: string,
+  ): DirectConversation | null {
+    const participant = this.findUserByHandle(handle);
+
+    if (!participant || participant.id === currentUser.id) {
+      return null;
+    }
+
+    return {
+      roomId: getDirectRoomId(currentUser.id, participant.id),
+      type: "direct",
+      participant: toPublicUser(participant),
+    };
+  }
+
+  canUserAccessRoom(userId: string, roomId: string): boolean {
+    if (roomId === LOBBY_ROOM_ID) {
+      return true;
+    }
+
+    const directRoom = parseDirectRoomId(roomId);
+
+    if (!directRoom || !directRoom.participantIds.includes(userId)) {
+      return false;
+    }
+
+    return directRoom.participantIds.every((participantId) => {
+      return this.findUserById(participantId) !== null;
+    });
   }
 
   listMessages(roomId: string, limit: number): ChatMessage[] {
@@ -98,7 +173,7 @@ export class TalkNestDatabase {
            ORDER BY timestamp DESC
            LIMIT ?
          )
-         ORDER BY timestamp ASC`
+         ORDER BY timestamp ASC`,
       )
       .all(roomId, limit) as MessageRow[];
 
@@ -117,13 +192,13 @@ export class TalkNestDatabase {
       text: input.text,
       timestamp: new Date().toISOString(),
       type: "text",
-      roomId: input.roomId
+      roomId: input.roomId,
     };
 
     this.db
       .prepare(
         `INSERT INTO messages (id, sender_id, sender_name, text, timestamp, type, room_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         message.id,
@@ -132,7 +207,7 @@ export class TalkNestDatabase {
         message.text,
         message.timestamp,
         message.type,
-        message.roomId
+        message.roomId,
       );
 
     return message;
@@ -147,6 +222,7 @@ export class TalkNestDatabase {
       CREATE TABLE IF NOT EXISTS users (
         id TEXT PRIMARY KEY,
         username TEXT NOT NULL UNIQUE,
+        handle TEXT NOT NULL,
         email TEXT NOT NULL UNIQUE,
         display_name TEXT NOT NULL,
         password_hash TEXT NOT NULL,
@@ -167,13 +243,33 @@ export class TalkNestDatabase {
       CREATE INDEX IF NOT EXISTS idx_messages_room_timestamp
       ON messages (room_id, timestamp);
     `);
+    this.ensureHandleColumn();
+    this.db.exec(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_users_handle_unique
+      ON users (lower(handle));
+    `);
+  }
+
+  private ensureHandleColumn() {
+    const columns = this.db.prepare("PRAGMA table_info(users)").all() as Array<{
+      name: string;
+    }>;
+
+    if (columns.some((column) => column.name === "handle")) {
+      return;
+    }
+
+    this.db.exec("ALTER TABLE users ADD COLUMN handle TEXT");
+    this.db.exec(
+      "UPDATE users SET handle = lower(username) WHERE handle IS NULL",
+    );
   }
 
   private seedDemoUsers() {
     const insert = this.db.prepare(
       `INSERT OR IGNORE INTO users
-       (id, username, email, display_name, password_hash, created_at)
-       VALUES (?, ?, ?, ?, ?, ?)`
+       (id, username, handle, email, display_name, password_hash, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
     );
     const passwordHash = bcrypt.hashSync("password123", 10);
     const createdAt = new Date().toISOString();
@@ -182,10 +278,11 @@ export class TalkNestDatabase {
       insert.run(
         user.id,
         user.username,
+        user.handle,
         user.email,
         user.displayName,
         passwordHash,
-        createdAt
+        createdAt,
       );
     }
   }
@@ -195,8 +292,9 @@ export function toPublicUser(user: UserRecord): PublicUser {
   return {
     id: user.id,
     username: user.username,
+    handle: user.handle,
     email: user.email,
-    displayName: user.displayName
+    displayName: user.displayName,
   };
 }
 
@@ -204,10 +302,11 @@ function mapUserRow(row: UserRow): UserRecord {
   return {
     id: row.id,
     username: row.username,
+    handle: row.handle,
     email: row.email,
     displayName: row.display_name,
     passwordHash: row.password_hash,
-    createdAt: row.created_at
+    createdAt: row.created_at,
   };
 }
 
@@ -219,6 +318,6 @@ function mapMessageRow(row: MessageRow): ChatMessage {
     text: row.text,
     timestamp: row.timestamp,
     type: row.type,
-    roomId: row.room_id
+    roomId: row.room_id,
   };
 }

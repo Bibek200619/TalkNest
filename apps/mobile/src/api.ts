@@ -1,5 +1,10 @@
 import { API_URL, ROOM_ID } from "./config";
-import type { ChatMessage, PublicUser, Session } from "./types";
+import type {
+  ChatMessage,
+  DirectConversation,
+  PublicUser,
+  Session,
+} from "./types";
 
 type ErrorResponse = {
   error?: {
@@ -14,13 +19,16 @@ export class ApiError extends Error {
   }
 }
 
-export async function login(identifier: string, password: string): Promise<Session> {
+export async function login(
+  identifier: string,
+  password: string,
+): Promise<Session> {
   const response = await fetch(`${API_URL}/api/auth/login`, {
     method: "POST",
     headers: {
-      "Content-Type": "application/json"
+      "Content-Type": "application/json",
     },
-    body: JSON.stringify({ identifier, password })
+    body: JSON.stringify({ identifier, password }),
   });
 
   return parseResponse<Session>(response, "Unable to log in");
@@ -28,23 +36,60 @@ export async function login(identifier: string, password: string): Promise<Sessi
 
 export async function fetchCurrentUser(token: string): Promise<PublicUser> {
   const response = await fetch(`${API_URL}/api/auth/me`, {
-    headers: authHeaders(token)
+    headers: authHeaders(token),
   });
   const body = await parseResponse<{ user: PublicUser }>(
     response,
-    "Unable to restore session"
+    "Unable to restore session",
   );
 
   return body.user;
 }
 
-export async function fetchMessages(token: string): Promise<ChatMessage[]> {
-  const response = await fetch(`${API_URL}/api/messages?roomId=${ROOM_ID}`, {
-    headers: authHeaders(token)
+export async function fetchUsers(token: string): Promise<PublicUser[]> {
+  const response = await fetch(`${API_URL}/api/users`, {
+    headers: authHeaders(token),
+  });
+  const body = await parseResponse<{ users: PublicUser[] }>(
+    response,
+    "Unable to load users",
+  );
+
+  return body.users;
+}
+
+export async function resolveDirectConversation(
+  token: string,
+  handle: string,
+): Promise<DirectConversation> {
+  const response = await fetch(`${API_URL}/api/direct-conversations/resolve`, {
+    method: "POST",
+    headers: {
+      ...authHeaders(token),
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ handle }),
+  });
+  const body = await parseResponse<{ conversation: DirectConversation }>(
+    response,
+    "Unable to open conversation",
+  );
+
+  return body.conversation;
+}
+
+export async function fetchMessages(
+  token: string,
+  roomId = ROOM_ID,
+): Promise<ChatMessage[]> {
+  const url = new URL(`${API_URL}/api/messages`);
+  url.searchParams.set("roomId", roomId);
+  const response = await fetch(url.toString(), {
+    headers: authHeaders(token),
   });
   const body = await parseResponse<{ messages: ChatMessage[] }>(
     response,
-    "Unable to load messages"
+    "Unable to load messages",
   );
 
   return body.messages;
@@ -52,11 +97,14 @@ export async function fetchMessages(token: string): Promise<ChatMessage[]> {
 
 function authHeaders(token: string) {
   return {
-    Authorization: `Bearer ${token}`
+    Authorization: `Bearer ${token}`,
   };
 }
 
-async function parseResponse<T>(response: Response, fallback: string): Promise<T> {
+async function parseResponse<T>(
+  response: Response,
+  fallback: string,
+): Promise<T> {
   let body: ErrorResponse | T | null = null;
 
   try {
