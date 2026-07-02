@@ -11,6 +11,7 @@
     "dev:server": "npm run dev -w @talknest/server",
     "dev:web": "npm run dev -w @talknest/web",
     "dev:mobile": "npm run start -w @talknest/mobile",
+    "deploy:vercel": "npx vercel@54.18.7 --prod",
     "build": "npm run build -w @talknest/server && npm run build -w @talknest/web",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",

@@ -74,6 +74,22 @@ npm run test:visual:web
 
 The visual check saves screenshots in `apps/web/artifacts/` and verifies that the Three.js canvas is not blank on desktop and mobile viewports.
 
+## Vercel Deployment
+
+This repository is configured to deploy the Vite landing page to Vercel from the repo root.
+
+```bash
+npm run deploy:vercel
+```
+
+The Vercel build uses:
+
+- Build command: `npm run build -w @talknest/web`
+- Output directory: `apps/web/dist`
+- Config file: `vercel.json`
+
+The real-time chat backend should be deployed separately to a long-running Node host because Socket.io WebSockets and SQLite persistence are not a good fit for Vercel serverless functions. After the backend is hosted, point the mobile app to it with `EXPO_PUBLIC_API_URL`.
+
 ## API
 
 - `GET /health` - service health

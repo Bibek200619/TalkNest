@@ -1,0 +1,11 @@
+.agents/
+.idea/
+.git/
+node_modules/
+coverage/
+apps/server/data/
+apps/server/dist/
+apps/web/artifacts/
+apps/web/dist/
+*.log
+.env
