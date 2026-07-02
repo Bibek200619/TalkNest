@@ -1,0 +1,16 @@
+CODEX.md
+.env
+PRD.md
+node_modules/
+dist/
+build/
+coverage/
+.expo/
+.expo-shared/
+.vite/
+.DS_Store
+*.log
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+apps/server/data/
