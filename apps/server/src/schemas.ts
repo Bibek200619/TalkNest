@@ -62,51 +62,69 @@ export const profileUpdateSchema = registerSchema
     message: "Choose at least one profile field to update",
   });
 
-export const messageInputSchema = z.object({
-  roomId: z.string().trim().min(1).max(80).default("lobby"),
-  text: z.string().trim().max(1000).default(""),
-  attachment: z
-    .object({
-      kind: z.enum(["image", "video", "document"]),
-      fileName: z.string().trim().min(1).max(140),
-      mimeType: z.string().trim().min(1).max(140),
-      size: z.number().int().min(1),
-      dataUrl: z.string().min(1).max(maxAttachmentDataUrlLength),
-    })
-    .superRefine((attachment, context) => {
-      const allowed = allowedAttachmentMimeTypes[attachment.kind];
+const attachmentSchema = z
+  .preprocess(
+    (value) => (value === null ? undefined : value),
+    z
+      .object({
+        kind: z.enum(["image", "video", "document"]),
+        fileName: z.string().trim().min(1).max(140),
+        mimeType: z.string().trim().min(1).max(140),
+        size: z.number().int().min(1),
+        dataUrl: z.string().min(1).max(maxAttachmentDataUrlLength),
+      })
+      .superRefine((attachment, context) => {
+        const allowed = allowedAttachmentMimeTypes[attachment.kind];
 
-      if (!(allowed as readonly string[]).includes(attachment.mimeType)) {
-        context.addIssue({
-          code: "custom",
-          message: "Unsupported attachment type",
-          path: ["mimeType"],
-        });
-      }
+        if (!(allowed as readonly string[]).includes(attachment.mimeType)) {
+          context.addIssue({
+            code: "custom",
+            message: "Unsupported attachment type",
+            path: ["mimeType"],
+          });
+        }
 
-      if (attachment.size > attachmentLimits[attachment.kind]) {
-        context.addIssue({
-          code: "custom",
-          message: `Attachment exceeds ${Math.floor(
-            attachmentLimits[attachment.kind] / (1024 * 1024),
-          )} MB limit`,
-          path: ["size"],
-        });
-      }
+        if (attachment.size > attachmentLimits[attachment.kind]) {
+          context.addIssue({
+            code: "custom",
+            message: `Attachment exceeds ${Math.floor(
+              attachmentLimits[attachment.kind] / (1024 * 1024),
+            )} MB limit`,
+            path: ["size"],
+          });
+        }
 
-      if (!attachment.dataUrl.startsWith(`data:${attachment.mimeType};base64,`)) {
-        context.addIssue({
-          code: "custom",
-          message: "Attachment data must match its MIME type",
-          path: ["dataUrl"],
-        });
-      }
-    })
-    .optional(),
-}).refine((input) => input.text.trim().length > 0 || input.attachment, {
-  message: "Message cannot be empty",
-  path: ["text"],
-});
+        if (
+          !attachment.dataUrl.startsWith(`data:${attachment.mimeType};base64,`)
+        ) {
+          context.addIssue({
+            code: "custom",
+            message: "Attachment data must match its MIME type",
+            path: ["dataUrl"],
+          });
+        }
+      })
+      .optional(),
+  );
+
+export const messageInputSchema = z
+  .preprocess(
+    (value) => (value === null ? {} : value),
+    z.object({
+      roomId: z.string().trim().min(1).max(80).default("lobby"),
+      text: z
+        .preprocess(
+          (value) => (value === null ? "" : value),
+          z.string().trim().max(1000),
+        )
+        .default(""),
+      attachment: attachmentSchema,
+    }),
+  )
+  .refine((input) => input.text.trim().length > 0 || input.attachment, {
+    message: "Message cannot be empty",
+    path: ["text"],
+  });
 
 export const roomJoinSchema = z.object({
   roomId: z.string().trim().min(1).max(80).default("lobby"),

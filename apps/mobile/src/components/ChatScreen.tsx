@@ -406,9 +406,14 @@ export function ChatScreen({
     setSending(true);
     setDraft("");
     setSelectedAttachment(null);
+    const payload = {
+      roomId: conversation.roomId,
+      text,
+      ...(attachment ? { attachment } : {}),
+    };
     socket.emit(
       "message:send",
-      { roomId: conversation.roomId, text, attachment },
+      payload,
       (ack: SendAck) => {
         setSending(false);
 

@@ -292,6 +292,61 @@ describe("TalkNest server", () => {
     socket.close();
   });
 
+  it("treats null socket message payloads as empty messages", async () => {
+    const priya = await registerUser({
+      username: "priya",
+      handle: "priya",
+      email: "priya@talknest.test",
+      displayName: "Priya Shah",
+    });
+    const socket = await connectSocket(priya.token);
+
+    await expect(emitRawMessage(socket, null)).resolves.toEqual({
+      ok: false,
+      error: "Message cannot be empty",
+    });
+
+    socket.close();
+  });
+
+  it("sends text messages when attachment is explicitly null", async () => {
+    const priya = await registerUser({
+      username: "priya",
+      handle: "priya",
+      email: "priya@talknest.test",
+      displayName: "Priya Shah",
+    });
+    const noah = await registerUser({
+      username: "noah",
+      handle: "noah",
+      email: "noah@talknest.test",
+      displayName: "Noah Kim",
+    });
+    const priyaSocket = await connectSocket(priya.token);
+    const noahSocket = await connectSocket(noah.token);
+    const received = waitForMessage(noahSocket);
+
+    const ack = await emitMessage(priyaSocket, {
+      roomId: "lobby",
+      text: "Hello without a file",
+      attachment: null,
+    });
+
+    expect(ack.ok).toBe(true);
+    const message = await received;
+
+    expect(message).toMatchObject({
+      senderId: priya.user.id,
+      text: "Hello without a file",
+      type: "text",
+      roomId: "lobby",
+    });
+    expect(message.attachment).toBeUndefined();
+
+    priyaSocket.close();
+    noahSocket.close();
+  });
+
   it("broadcasts allowed attachment messages", async () => {
     const priya = await registerUser({
       username: "priya",
@@ -500,6 +555,23 @@ describe("TalkNest server", () => {
     liSocket.close();
   });
 
+  it("joins the lobby when room join payload is null", async () => {
+    const priya = await registerUser({
+      username: "priya",
+      handle: "priya",
+      email: "priya@talknest.test",
+      displayName: "Priya Shah",
+    });
+    const socket = await connectSocket(priya.token);
+
+    await expect(joinRawRoom(socket, null)).resolves.toEqual({
+      ok: true,
+      roomId: "lobby",
+    });
+
+    socket.close();
+  });
+
   async function registerUser(input: {
     username: string;
     handle: string;
@@ -555,10 +627,14 @@ describe("TalkNest server", () => {
   }
 
   function joinRoom(socket: Socket, roomId: string) {
+    return joinRawRoom(socket, { roomId });
+  }
+
+  function joinRawRoom(socket: Socket, payload: unknown) {
     return new Promise<
       { ok: true; roomId: string } | { ok: false; error: string }
     >((resolve) => {
-      socket.emit("room:join", { roomId }, resolve);
+      socket.emit("room:join", payload, resolve);
     });
   }
 
@@ -573,9 +649,13 @@ describe("TalkNest server", () => {
         mimeType: string;
         size: number;
         dataUrl: string;
-      };
+      } | null;
     },
   ) {
+    return emitRawMessage(socket, payload);
+  }
+
+  function emitRawMessage(socket: Socket, payload: unknown) {
     return new Promise<
       { ok: true; message: ChatMessage } | { ok: false; error: string }
     >((resolve) => {
