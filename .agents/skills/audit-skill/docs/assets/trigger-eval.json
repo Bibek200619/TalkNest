@@ -1,0 +1,82 @@
+[
+  {
+    "query": "can you audit my react app? here's the github link: https://github.com/myuser/my-store. it's an e-commerce site and the checkout flow is broken on mobile",
+    "should_trigger": true
+  },
+  {
+    "query": "I have 6 system prompts for my AI pipeline — an orchestrator, a code generator, a validator, a formatter, a retry handler, and a planner. can you review them all and tell me what's wrong",
+    "should_trigger": true
+  },
+  {
+    "query": "find all bugs and accessibility issues in this component: [pastes React code]",
+    "should_trigger": true
+  },
+  {
+    "query": "my app is getting security complaints. can you do a full security review of the codebase? i'll paste the relevant files",
+    "should_trigger": true
+  },
+  {
+    "query": "score my system prompts out of 100 and tell me which ones are bottlenecks. i'm building a multi-agent code review tool",
+    "should_trigger": true
+  },
+  {
+    "query": "what WCAG issues does my login page have? here's the html",
+    "should_trigger": true
+  },
+  {
+    "query": "our lighthouse score is terrible. can you look at our next.js app and tell us what's killing performance?",
+    "should_trigger": true
+  },
+  {
+    "query": "review my agent architecture. i want to know what will break when we scale to 10k users per day",
+    "should_trigger": true
+  },
+  {
+    "query": "do a full end to end audit of this repo. build command is npm run build, the main flows are login and checkout",
+    "should_trigger": true
+  },
+  {
+    "query": "my AI system prompts are producing inconsistent results. can you find the bottlenecks?",
+    "should_trigger": true
+  },
+  {
+    "query": "what's the difference between WCAG 2.1 AA and AAA?",
+    "should_trigger": false
+  },
+  {
+    "query": "write me a python function that validates email addresses",
+    "should_trigger": false
+  },
+  {
+    "query": "can you explain how React error boundaries work?",
+    "should_trigger": false
+  },
+  {
+    "query": "what are some best practices for writing system prompts for LLMs?",
+    "should_trigger": false
+  },
+  {
+    "query": "fix the bug in line 42 of my auth.ts file — it's throwing a null pointer exception",
+    "should_trigger": false
+  },
+  {
+    "query": "write a playwright test for my login page",
+    "should_trigger": false
+  },
+  {
+    "query": "what's the best way to structure a multi-agent AI system?",
+    "should_trigger": false
+  },
+  {
+    "query": "help me write a code review for this PR — just check the logic in the payment module",
+    "should_trigger": false
+  },
+  {
+    "query": "what does a 4.5:1 contrast ratio mean in terms of accessibility?",
+    "should_trigger": false
+  },
+  {
+    "query": "rewrite this system prompt to be clearer",
+    "should_trigger": false
+  }
+]
